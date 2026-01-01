@@ -1,5 +1,4 @@
 require("dotenv").config();
-
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -13,27 +12,27 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ===============================
-   HEALTH CHECK (OPTIONAL)
-================================ */
+/* ======================
+   BASIC TEST ROUTE
+====================== */
 app.get("/", (req, res) => {
   res.send("Color Game Backend Running");
 });
 
-/* ===============================
-   REGISTER (MOBILE + PASSWORD)
-================================ */
+/* ======================
+   REGISTER (NO OTP)
+====================== */
 app.post("/register", async (req, res) => {
   try {
     const { mobile, password } = req.body;
 
     if (!mobile || !password) {
-      return res.status(400).json({ message: "Mobile and password required" });
+      return res.status(400).json({ message: "Mobile & password required" });
     }
 
     const existingUser = await User.findOne({ mobile });
     if (existingUser) {
-      return res.status(400).json({ message: "User already exists" });
+      return res.json({ message: "User already exists" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -47,14 +46,14 @@ app.post("/register", async (req, res) => {
 
     res.json({ message: "Registration successful" });
   } catch (err) {
-    console.error(err);
+    console.error("REGISTER ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-/* ===============================
+/* ======================
    LOGIN (MOBILE + PASSWORD)
-================================ */
+====================== */
 app.post("/login", async (req, res) => {
   try {
     const { mobile, password } = req.body;
@@ -71,84 +70,37 @@ app.post("/login", async (req, res) => {
 
     const token = jwt.sign(
       { userId: user._id },
-      process.env.JWT_SECRET
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
     );
 
-    res.json({ token });
+    res.json({
+      message: "Login successful",
+      token
+    });
   } catch (err) {
-    console.error(err);
+    console.error("LOGIN ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-/* ===============================
-   AUTH MIDDLEWARE
-================================ */
-const auth = (req, res, next) => {
-  const token = req.headers.authorization;
-
-  if (!token) {
-    return res.status(401).json({ message: "No token provided" });
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.userId = decoded.userId;
-    next();
-  } catch {
-    res.status(401).json({ message: "Invalid token" });
-  }
-};
-
-/* ===============================
+/* ======================
    WALLET
-================================ */
-app.get("/wallet", auth, async (req, res) => {
-  const wallet = await Wallet.findOne({ userId: req.userId });
+====================== */
+app.get("/wallet/:userId", async (req, res) => {
+  const wallet = await Wallet.findOne({ userId: req.params.userId });
   res.json({ balance: wallet.balance });
 });
 
-/* ===============================
-   BET
-================================ */
-app.post("/bet", auth, async (req, res) => {
-  const { color, amount } = req.body;
-
-  const wallet = await Wallet.findOne({ userId: req.userId });
-
-  if (wallet.balance < amount) {
-    return res.status(400).json({ message: "Insufficient balance" });
-  }
-
-  wallet.balance -= amount;
-
-  const colors = ["RED", "GREEN", "VIOLET"];
-  const result = colors[Math.floor(Math.random() * colors.length)];
-
-  if (color === result) {
-    wallet.balance += amount * (color === "VIOLET" ? 4.5 : 2);
-  }
-
-  await wallet.save();
-
-  res.json({
-    result,
-    wallet: wallet.balance
-  });
-});
-
-/* ===============================
-   MONGODB CONNECTION
-================================ */
+/* ======================
+   DATABASE + SERVER
+====================== */
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch(err => console.error("Mongo Error:", err));
-
-/* ===============================
-   START SERVER
-================================ */
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
-});
+  .then(() => {
+    console.log("MongoDB Connected");
+    app.listen(process.env.PORT || 5000, () =>
+      console.log("Server running")
+    );
+  })
+  .catch(err => console.log("Mongo error:", err));
