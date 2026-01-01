@@ -55,3 +55,26 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
   console.log("Server running on port " + PORT)
 );
+app.post("/register", async (req, res) => {
+  const { mobile, password } = req.body;
+
+  if (!mobile || !password) {
+    return res.status(400).json({ message: "Mobile and password required" });
+  }
+
+  const existing = await User.findOne({ mobile });
+  if (existing) {
+    return res.status(400).json({ message: "User already exists" });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  const user = await User.create({
+    mobile,
+    password: hashedPassword
+  });
+
+  await Wallet.create({ userId: user._id });
+
+  res.json({ message: "Registration successful" });
+});
