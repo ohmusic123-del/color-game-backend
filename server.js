@@ -8,8 +8,12 @@ const jwt = require("jsonwebtoken");
 const User = require("./models/User");
 
 const app = express();
+const auth = require("./middleware/auth");
+
 app.use(cors());
 app.use(express.json());
+
+
 
 // ✅ Health check
 app.get("/", (req, res) => {
@@ -74,6 +78,37 @@ app.post("/login", async (req, res) => {
       wallet: user.wallet
     });
 
+  } catch (err) {
+    res.status(500).json({ message: "Server error" });
+  }
+});app.post("/bet", auth, async (req, res) => {
+  try {
+    const { color, amount } = req.body;
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.wallet < amount) {
+      return res.status(400).json({ message: "Insufficient balance" });
+    }
+
+    const colors = ["RED", "GREEN", "VIOLET"];
+    const result = colors[Math.floor(Math.random() * colors.length)];
+
+    user.wallet -= amount;
+
+    if (color === result) {
+      user.wallet += amount * (color === "VIOLET" ? 5 : 2);
+    }
+
+    await user.save();
+
+    res.json({
+      result,
+      wallet: user.wallet
+    });
   } catch (err) {
     res.status(500).json({ message: "Server error" });
   }
