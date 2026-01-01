@@ -8,6 +8,15 @@ const betSchema = new mongoose.Schema({
   roundId: Number,
   color: String,
   amount: Number,
+  result: {
+    type: String,
+    enum: ["WIN", "LOSS"],
+    default: null
+  },
+  payout: {
+    type: Number,
+    default: 0
+  },
   createdAt: {
     type: Date,
     default: Date.now
