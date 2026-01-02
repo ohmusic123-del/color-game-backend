@@ -22,7 +22,7 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   REGISTER (NO OTP)
+   REGISTER
 ========================= */
 app.post("/register", async (req, res) => {
   try {
@@ -39,13 +39,13 @@ app.post("/register", async (req, res) => {
 
     const hashed = await bcrypt.hash(password, 10);
 
-    const user = await User.create({
+    await User.create({
       mobile,
       password: hashed,
       wallet: 1000
     });
 
-    res.json({ message: "Registration successful", userId: user._id });
+    res.json({ message: "Registration successful" });
   } catch (err) {
     res.status(500).json({ message: "Server error" });
   }
@@ -65,12 +65,12 @@ app.post("/login", async (req, res) => {
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) {
-      return res.status(400).json({ message: "Invalid password" });
+      return res.status(400).json({ message: "Wrong password" });
     }
 
     const token = jwt.sign(
       { userId: user._id },
-      "SECRET_KEY",
+      process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
@@ -85,6 +85,14 @@ app.post("/login", async (req, res) => {
 });
 
 /* =========================
+   USER INFO
+========================= */
+app.get("/me", auth, async (req, res) => {
+  const user = await User.findById(req.userId);
+  res.json({ wallet: user.wallet });
+});
+
+/* =========================
    GAME STATE
 ========================= */
 let currentRound = {
@@ -94,11 +102,15 @@ let currentRound = {
 };
 
 /* =========================
-   PLACE BET (NO RESULT HERE)
+   PLACE BET
 ========================= */
 app.post("/bet", auth, async (req, res) => {
   try {
     const { color, amount } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ message: "Invalid amount" });
+    }
 
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -117,7 +129,10 @@ app.post("/bet", auth, async (req, res) => {
       amount
     });
 
-    res.json({ message: "Bet placed successfully" });
+    res.json({
+      message: "Bet placed successfully",
+      wallet: user.wallet
+    });
   } catch (err) {
     res.status(500).json({ message: "Server error" });
   }
@@ -134,8 +149,9 @@ const settleBets = async () => {
     if (!user) continue;
 
     if (bet.color === currentRound.result) {
-      const multiplier = bet.color === "VIOLET" ? 5 : 2;
+      const multiplier = bet.color === "VIOLET" ? 4.5 : 2;
       const win = bet.amount * multiplier;
+
       user.wallet += win;
       bet.result = "WIN";
       bet.payout = win;
@@ -150,7 +166,7 @@ const settleBets = async () => {
 };
 
 /* =========================
-   ROUND TIMER
+   ROUND TIMER (30s)
 ========================= */
 setInterval(async () => {
   if (currentRound.status === "OPEN") {
@@ -168,10 +184,13 @@ setInterval(async () => {
     };
   }
 }, 30000);
-app.get("/current-round", async (req, res) => {
+
+/* =========================
+   CURRENT ROUND API
+========================= */
+app.get("/current-round", (req, res) => {
   res.json({
     roundId: currentRound.roundId,
-    endTime: currentRound.endTime,
     status: currentRound.status
   });
 });
@@ -179,7 +198,8 @@ app.get("/current-round", async (req, res) => {
 /* =========================
    DB + SERVER
 ========================= */
-mongoose.connect(process.env.MONGO_URI)
+mongoose
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch(err => console.log("Mongo Error", err));
 
