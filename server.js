@@ -168,6 +168,13 @@ setInterval(async () => {
     };
   }
 }, 30000);
+app.get("/current-round", async (req, res) => {
+  res.json({
+    roundId: currentRound.roundId,
+    endTime: currentRound.endTime,
+    status: currentRound.status
+  });
+});
 
 /* =========================
    DB + SERVER
