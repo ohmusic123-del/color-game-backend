@@ -1,25 +1,28 @@
-import express from "express";
-import cors from "cors";
-import jwt from "jsonwebtoken";
-import dotenv from "dotenv";
+const express = require("express");
+const cors = require("cors");
+const jwt = require("jsonwebtoken");
 
-dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = "BIGWIN_SECRET_KEY";
 
-/* ------------------ IN-MEMORY STORAGE ------------------ */
+/* ================= STORAGE ================= */
 const users = {};
-let currentRound = null;
+let round = {
+  red: 0,
+  green: 0,
+  bets: []
+};
 
-/* ------------------ HELPERS ------------------ */
+/* ================= AUTH ================= */
 function auth(req, res, next) {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "No token" });
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ error: "No token" });
   try {
+    const token = header.split(" ")[1];
     req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
@@ -27,99 +30,89 @@ function auth(req, res, next) {
   }
 }
 
-function getOrCreateRound() {
-  if (!currentRound || currentRound.closed) {
-    currentRound = {
-      id: Date.now(),
-      redPool: 0,
-      greenPool: 0,
-      bets: [],
-      closed: false
-    };
-  }
-  return currentRound;
-}
+/* ================= ROUTES ================= */
 
-/* ------------------ AUTH ------------------ */
+app.get("/", (req, res) => {
+  res.send("BIGWIN Backend Running");
+});
+
+/* REGISTER */
 app.post("/api/register", (req, res) => {
   const { mobile, password } = req.body;
-  if (users[mobile]) return res.status(400).json({ error: "User exists" });
+  if (users[mobile]) {
+    return res.status(400).json({ error: "User exists" });
+  }
 
   users[mobile] = {
     mobile,
     password,
-    wallet: 100, // signup bonus
-    bonus: 100,
-    wagered: 0,
-    deposited: false
+    wallet: 100,
+    wagered: 0
   };
 
-  res.json({ message: "Registered", wallet: 100 });
+  res.json({ message: "Registered successfully" });
 });
 
+/* LOGIN */
 app.post("/api/login", (req, res) => {
   const { mobile, password } = req.body;
   const user = users[mobile];
-  if (!user || user.password !== password)
-    return res.status(401).json({ error: "Invalid credentials" });
+
+  if (!user || user.password !== password) {
+    return res.status(401).json({ error: "Invalid login" });
+  }
 
   const token = jwt.sign({ mobile }, JWT_SECRET);
   res.json({ token, wallet: user.wallet });
 });
 
-/* ------------------ GAME ------------------ */
+/* CURRENT ROUND */
 app.get("/api/game/round", auth, (req, res) => {
-  const round = getOrCreateRound();
-  res.json({ roundId: round.id });
+  res.json({ status: "OPEN" });
 });
 
+/* PLACE BET */
 app.post("/api/game/bet", auth, (req, res) => {
-  const { amount, color } = req.body;
+  const { color, amount } = req.body;
   const user = users[req.user.mobile];
 
-  if (amount < 1) return res.status(400).json({ error: "Min bet ₹1" });
-  if (user.wallet < amount)
-    return res.status(400).json({ error: "Insufficient balance" });
   if (!["RED", "GREEN"].includes(color))
     return res.status(400).json({ error: "Invalid color" });
 
-  const round = getOrCreateRound();
+  if (amount < 1)
+    return res.status(400).json({ error: "Minimum bet is 1" });
+
+  if (user.wallet < amount)
+    return res.status(400).json({ error: "Insufficient balance" });
 
   user.wallet -= amount;
   user.wagered += amount;
 
-  if (color === "RED") round.redPool += amount;
-  else round.greenPool += amount;
+  if (color === "RED") round.red += amount;
+  else round.green += amount;
 
-  round.bets.push({ mobile: user.mobile, amount, color });
+  round.bets.push({ mobile: user.mobile, color, amount });
 
   res.json({ message: "Bet placed", wallet: user.wallet });
 });
 
-app.post("/api/game/close", (req, res) => {
-  if (!currentRound || currentRound.closed)
-    return res.json({ message: "No active round" });
+/* CLOSE ROUND EVERY 30 SECONDS */
+setInterval(() => {
+  if (round.bets.length === 0) return;
 
-  const winColor =
-    currentRound.redPool <= currentRound.greenPool ? "RED" : "GREEN";
+  const winner = round.red <= round.green ? "RED" : "GREEN";
 
-  currentRound.bets.forEach(bet => {
-    if (bet.color === winColor) {
-      const win = bet.amount * 2;
-      const fee = win * 0.02;
-      users[bet.mobile].wallet += win - fee;
+  round.bets.forEach(b => {
+    if (b.color === winner) {
+      const win = b.amount * 2;
+      const payout = win - win * 0.02;
+      users[b.mobile].wallet += payout;
     }
   });
 
-  currentRound.closed = true;
-  res.json({ winner: winColor });
-});
+  round = { red: 0, green: 0, bets: [] };
+}, 30000);
 
-/* ------------------ HEALTH ------------------ */
-app.get("/", (req, res) => {
-  res.send("BIGWIN Backend Running");
+app.listen(PORT, () => {
+  console.log("BIGWIN backend running on port", PORT);
 });
-
-app.listen(PORT, () =>
-  console.log(`BIGWIN backend running on ${PORT}`)
-);
