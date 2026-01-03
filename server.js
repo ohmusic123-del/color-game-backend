@@ -1,117 +1,125 @@
-require("dotenv").config();
-const express = require("express");
-const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const cors = require("cors");
+import express from "express";
+import cors from "cors";
+import jwt from "jsonwebtoken";
+import dotenv from "dotenv";
 
-const User = require("./models/User");
-const Bet = require("./models/Bet");
-const auth = require("./middleware/auth");
-
+dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-let roundId = 1;
-let pool = { RED: 0, GREEN: 0, VIOLET: 0 };
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET;
 
-app.get("/", (_, res) => res.send("BIGWIN Backend Running"));
+/* ------------------ IN-MEMORY STORAGE ------------------ */
+const users = {};
+let currentRound = null;
 
-/* REGISTER */
-app.post("/register", async (req, res) => {
+/* ------------------ HELPERS ------------------ */
+function auth(req, res, next) {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "No token" });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+  }
+}
+
+function getOrCreateRound() {
+  if (!currentRound || currentRound.closed) {
+    currentRound = {
+      id: Date.now(),
+      redPool: 0,
+      greenPool: 0,
+      bets: [],
+      closed: false
+    };
+  }
+  return currentRound;
+}
+
+/* ------------------ AUTH ------------------ */
+app.post("/api/register", (req, res) => {
   const { mobile, password } = req.body;
-  const exists = await User.findOne({ mobile });
-  if (exists) return res.status(400).json({ message: "User exists" });
+  if (users[mobile]) return res.status(400).json({ error: "User exists" });
 
-  const hash = await bcrypt.hash(password, 10);
-  const user = await User.create({
+  users[mobile] = {
     mobile,
-    password: hash,
-    wallet: 100 // signup bonus
-  });
+    password,
+    wallet: 100, // signup bonus
+    bonus: 100,
+    wagered: 0,
+    deposited: false
+  };
 
-  res.json({ message: "Registered" });
+  res.json({ message: "Registered", wallet: 100 });
 });
 
-/* LOGIN */
-app.post("/login", async (req, res) => {
+app.post("/api/login", (req, res) => {
   const { mobile, password } = req.body;
-  const user = await User.findOne({ mobile });
-  if (!user) return res.status(400).json({ message: "Invalid login" });
+  const user = users[mobile];
+  if (!user || user.password !== password)
+    return res.status(401).json({ error: "Invalid credentials" });
 
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) return res.status(400).json({ message: "Invalid login" });
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
+  const token = jwt.sign({ mobile }, JWT_SECRET);
   res.json({ token, wallet: user.wallet });
 });
 
-/* PLACE BET */
-app.post("/bet", auth, async (req, res) => {
-  const { color, amount } = req.body;
-  if (amount < 1) return res.json({ message: "Min bet is 1" });
+/* ------------------ GAME ------------------ */
+app.get("/api/game/round", auth, (req, res) => {
+  const round = getOrCreateRound();
+  res.json({ roundId: round.id });
+});
 
-  const user = await User.findById(req.userId);
-  if (user.wallet < amount) return res.json({ message: "Low balance" });
+app.post("/api/game/bet", auth, (req, res) => {
+  const { amount, color } = req.body;
+  const user = users[req.user.mobile];
+
+  if (amount < 1) return res.status(400).json({ error: "Min bet ₹1" });
+  if (user.wallet < amount)
+    return res.status(400).json({ error: "Insufficient balance" });
+  if (!["RED", "GREEN"].includes(color))
+    return res.status(400).json({ error: "Invalid color" });
+
+  const round = getOrCreateRound();
 
   user.wallet -= amount;
-  user.totalWagered += amount;
-  await user.save();
+  user.wagered += amount;
 
-  pool[color] += amount;
+  if (color === "RED") round.redPool += amount;
+  else round.greenPool += amount;
 
-  await Bet.create({
-    userId: user._id,
-    color,
-    amount,
-    roundId
-  });
+  round.bets.push({ mobile: user.mobile, amount, color });
 
   res.json({ message: "Bet placed", wallet: user.wallet });
 });
 
-/* ROUND SETTLEMENT */
-setInterval(async () => {
-  const entries = Object.entries(pool);
-  if (entries.every(e => e[1] === 0)) return;
+app.post("/api/game/close", (req, res) => {
+  if (!currentRound || currentRound.closed)
+    return res.json({ message: "No active round" });
 
-  const winner = entries.sort((a, b) => a[1] - b[1])[0][0];
+  const winColor =
+    currentRound.redPool <= currentRound.greenPool ? "RED" : "GREEN";
 
-  const bets = await Bet.find({ roundId });
-  let totalPool = entries.reduce((a, b) => a + b[1], 0);
-
-  for (const bet of bets) {
-    if (bet.color === winner) {
-      let win = bet.amount * 2;
-      let fee = win * 0.02;
-      let payout = win - fee;
-
-      const user = await User.findById(bet.userId);
-      user.wallet += payout;
-      await user.save();
-
-      bet.result = "WIN";
-      bet.payout = payout;
-    } else {
-      bet.result = "LOSS";
-      bet.payout = 0;
+  currentRound.bets.forEach(bet => {
+    if (bet.color === winColor) {
+      const win = bet.amount * 2;
+      const fee = win * 0.02;
+      users[bet.mobile].wallet += win - fee;
     }
-    await bet.save();
-  }
+  });
 
-  pool = { RED: 0, GREEN: 0, VIOLET: 0 };
-  roundId++;
-}, 30000);
-
-/* WALLET */
-app.get("/wallet", auth, async (req, res) => {
-  const user = await User.findById(req.userId);
-  res.json({ wallet: user.wallet });
+  currentRound.closed = true;
+  res.json({ winner: winColor });
 });
 
-mongoose.connect(process.env.MONGO_URI).then(() => {
-  app.listen(process.env.PORT, () =>
-    console.log("Server running")
-  );
+/* ------------------ HEALTH ------------------ */
+app.get("/", (req, res) => {
+  res.send("BIGWIN Backend Running");
 });
+
+app.listen(PORT, () =>
+  console.log(`BIGWIN backend running on ${PORT}`)
+);
