@@ -1,19 +1,9 @@
 const mongoose = require("mongoose");
 
-const roundSchema = new mongoose.Schema({
-  roundId: Number,
-  startTime: Date,
-  endTime: Date,
-  result: {
-    type: String,
-    enum: ["RED", "GREEN", "VIOLET"],
-    default: null
-  },
-  status: {
-    type: String,
-    enum: ["OPEN", "CLOSED"],
-    default: "OPEN"
-  }
-});
-
-module.exports = mongoose.model("Round", roundSchema);
+module.exports = mongoose.model("Round", new mongoose.Schema({
+  roundId: String,
+  redPool: Number,
+  greenPool: Number,
+  winner: String,
+  createdAt: { type: Date, default: Date.now }
+}));
