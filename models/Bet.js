@@ -1,12 +1,9 @@
 const mongoose = require("mongoose");
 
-const betSchema = new mongoose.Schema({
-  userId: mongoose.Schema.Types.ObjectId,
+module.exports = mongoose.model("Bet", new mongoose.Schema({
+  mobile: String,
   color: String,
   amount: Number,
-  roundId: Number,
-  result: String,
-  payout: Number
-});
-
-module.exports = mongoose.model("Bet", betSchema);
+  roundId: String,
+  createdAt: { type: Date, default: Date.now }
+}));
