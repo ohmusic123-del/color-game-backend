@@ -13,90 +13,105 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* HEALTH */
-app.get("/", (req, res) => {
-  res.send("Color Game Backend Running");
-});
+let roundId = 1;
+let pool = { RED: 0, GREEN: 0, VIOLET: 0 };
+
+app.get("/", (_, res) => res.send("BIGWIN Backend Running"));
 
 /* REGISTER */
 app.post("/register", async (req, res) => {
   const { mobile, password } = req.body;
-  if (!mobile || !password)
-    return res.status(400).json({ message: "All fields required" });
-
   const exists = await User.findOne({ mobile });
   if (exists) return res.status(400).json({ message: "User exists" });
 
-  const hashed = await bcrypt.hash(password, 10);
-  await User.create({ mobile, password: hashed });
+  const hash = await bcrypt.hash(password, 10);
+  const user = await User.create({
+    mobile,
+    password: hash,
+    wallet: 100 // signup bonus
+  });
 
-  res.json({ message: "Registration successful" });
+  res.json({ message: "Registered" });
 });
 
 /* LOGIN */
 app.post("/login", async (req, res) => {
   const { mobile, password } = req.body;
-
   const user = await User.findOne({ mobile });
-  if (!user) return res.status(400).json({ message: "User not found" });
+  if (!user) return res.status(400).json({ message: "Invalid login" });
 
-  const match = await bcrypt.compare(password, user.password);
-  if (!match) return res.status(400).json({ message: "Wrong password" });
+  const ok = await bcrypt.compare(password, user.password);
+  if (!ok) return res.status(400).json({ message: "Invalid login" });
 
-  const token = jwt.sign(
-    { userId: user._id },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
   res.json({ token, wallet: user.wallet });
 });
 
 /* PLACE BET */
 app.post("/bet", auth, async (req, res) => {
   const { color, amount } = req.body;
-  const user = await User.findById(req.userId);
+  if (amount < 1) return res.json({ message: "Min bet is 1" });
 
-  if (user.wallet < amount)
-    return res.status(400).json({ message: "Low balance" });
+  const user = await User.findById(req.userId);
+  if (user.wallet < amount) return res.json({ message: "Low balance" });
 
   user.wallet -= amount;
+  user.totalWagered += amount;
   await user.save();
 
-  await Bet.create({ userId: user._id, color, amount });
+  pool[color] += amount;
+
+  await Bet.create({
+    userId: user._id,
+    color,
+    amount,
+    roundId
+  });
 
   res.json({ message: "Bet placed", wallet: user.wallet });
 });
 
-/* GAME LOGIC */
-let currentResult = "RED";
+/* ROUND SETTLEMENT */
 setInterval(async () => {
-  const colors = ["RED", "GREEN", "VIOLET"];
-  currentResult = colors[Math.floor(Math.random() * colors.length)];
+  const entries = Object.entries(pool);
+  if (entries.every(e => e[1] === 0)) return;
 
-  const bets = await Bet.find({ result: { $exists: false } });
+  const winner = entries.sort((a, b) => a[1] - b[1])[0][0];
+
+  const bets = await Bet.find({ roundId });
+  let totalPool = entries.reduce((a, b) => a + b[1], 0);
+
   for (const bet of bets) {
-    const user = await User.findById(bet.userId);
-    if (!user) continue;
+    if (bet.color === winner) {
+      let win = bet.amount * 2;
+      let fee = win * 0.02;
+      let payout = win - fee;
 
-    if (bet.color === currentResult) {
-      const win = bet.amount * 2;
-      user.wallet += win;
+      const user = await User.findById(bet.userId);
+      user.wallet += payout;
+      await user.save();
+
       bet.result = "WIN";
-      bet.payout = win;
+      bet.payout = payout;
     } else {
       bet.result = "LOSS";
       bet.payout = 0;
     }
-    await user.save();
     await bet.save();
   }
+
+  pool = { RED: 0, GREEN: 0, VIOLET: 0 };
+  roundId++;
 }, 30000);
 
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch(err => console.log(err));
+/* WALLET */
+app.get("/wallet", auth, async (req, res) => {
+  const user = await User.findById(req.userId);
+  res.json({ wallet: user.wallet });
+});
 
-app.listen(process.env.PORT, () =>
-  console.log("Server running on", process.env.PORT)
-);
+mongoose.connect(process.env.MONGO_URI).then(() => {
+  app.listen(process.env.PORT, () =>
+    console.log("Server running")
+  );
+});
