@@ -1,21 +1,10 @@
 const jwt = require("jsonwebtoken");
 
-const SECRET = "BIGWIN_SECRET_KEY";
-
-function auth(req, res, next) {
-  const token = req.headers.authorization;
-
-  if (!token) {
-    return res.status(401).json({ error: "No token" });
-  }
-
+module.exports = (req, res, next) => {
   try {
-    const decoded = jwt.verify(token, SECRET);
-    req.user = decoded;
+    req.user = jwt.verify(req.headers.authorization, process.env.JWT_SECRET);
     next();
   } catch {
-    res.status(401).json({ error: "Invalid token" });
+    res.status(401).json({ error: "Unauthorized" });
   }
-}
-
-module.exports = { auth, SECRET };
+};
