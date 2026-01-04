@@ -19,11 +19,17 @@ app.use(express.urlencoded({ extended: true }));
 app.get("/", (req, res) => res.send("BIGWIN backend running"));
 
 app.post("/register", async (req, res) => {
-  console.log("REGISTER BODY:", req.body); // 👈 ADD THIS
   try {
-    await User.create(req.body);
-    res.json({ message: "Registered" });
-  } catch {
+    const user = await User.create({
+      mobile: req.body.mobile,
+      password: req.body.password,
+      wallet: 100,        // signup bonus added to wallet
+      bonus: 100,
+      deposited: false
+    });
+
+    res.json({ message: "Registered with ₹100 bonus" });
+  } catch (err) {
     res.status(400).json({ error: "User exists" });
   }
 });
