@@ -70,6 +70,18 @@ app.get("/wallet", auth, async (req, res) => {
   res.json({ wallet: u.wallet });
 });
 
+/* ===== PROFILE ===== */
+
+app.get("/profile", auth, async (req, res) => {
+  const user = await User.findOne({ mobile: req.user.mobile });
+
+  res.json({
+    mobile: user.mobile,
+    wallet: user.wallet,
+    totalWagered: user.totalWagered
+  });
+});
+
 /* ===== BET HISTORY ===== */
 
 app.get("/bets", auth, async (req, res) => {
