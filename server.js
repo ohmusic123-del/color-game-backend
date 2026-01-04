@@ -70,6 +70,16 @@ app.get("/wallet", auth, async (req, res) => {
   res.json({ wallet: u.wallet });
 });
 
+/* ===== BET HISTORY ===== */
+
+app.get("/bets", auth, async (req, res) => {
+  const bets = await Bet.find({ mobile: req.user.mobile })
+    .sort({ createdAt: -1 })
+    .limit(10);
+
+  res.json(bets);
+});
+
 /* ===== ROUND ===== */
 
 app.get("/round/current", (req, res) => {
