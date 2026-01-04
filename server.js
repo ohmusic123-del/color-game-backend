@@ -85,10 +85,16 @@ app.get("/bets", auth, async (req, res) => {
 app.get("/round/current", (req, res) => {
   res.json(CURRENT_ROUND);
 });
-
 /* ===== BET ===== */
 
 app.post("/bet", auth, async (req, res) => {
+
+  // ⏱ Block betting after round ends
+  const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+  if (elapsed >= 30) {
+    return res.status(400).json({ error: "Round closed" });
+  }
+
   const { color, amount } = req.body;
   const u = await User.findOne({ mobile: req.user.mobile });
 
