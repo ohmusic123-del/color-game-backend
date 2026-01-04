@@ -38,6 +38,7 @@ app.post("/register", async (req, res) => {
       wallet: 100,     // signup bonus
       bonus: 100,
       deposited: false,
+      depositAmount: 0,   // ✅ REQUIRED
       totalWagered: 0
     });
 
@@ -175,6 +176,59 @@ app.post("/round/resolve", async (req, res) => {
     winner,
     nextRoundId: CURRENT_ROUND.id
   });
+});
+
+/* ===== DEPOSIT ===== */
+
+app.post("/deposit", auth, async (req, res) => {
+  const { amount } = req.body;
+  if (amount < 100) {
+    return res.status(400).json({ error: "Minimum deposit ₹100" });
+  }
+
+  const user = await User.findOne({ mobile: req.user.mobile });
+
+  user.wallet += amount;
+  user.deposited = true;
+  user.depositAmount += amount;
+
+  await user.save();
+
+  res.json({ message: "Deposit successful", wallet: user.wallet });
+});
+
+/* ===== WITHDRAW ===== */
+
+app.post("/withdraw", auth, async (req, res) => {
+  const { amount } = req.body;
+  const user = await User.findOne({ mobile: req.user.mobile });
+
+  if (amount < 100) {
+    return res.status(400).json({ error: "Minimum withdrawal ₹100" });
+  }
+
+  if (!user.deposited) {
+    return res.status(400).json({
+      error: "Deposit required before withdrawal"
+    });
+  }
+
+  const requiredWager = Math.max(user.bonus, user.depositAmount);
+
+  if (user.totalWagered < requiredWager) {
+    return res.status(400).json({
+      error: `Wager ₹${requiredWager - user.totalWagered} more to withdraw`
+    });
+  }
+
+  if (amount > user.wallet) {
+    return res.status(400).json({ error: "Insufficient balance" });
+  }
+
+  user.wallet -= amount;
+  await user.save();
+
+  res.json({ message: "Withdrawal request submitted" });
 });
 
 /* ===== START ===== */
