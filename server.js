@@ -16,16 +16,29 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+/* =========================
+   🔁 ROUND STATE (GLOBAL)
+========================= */
+let CURRENT_ROUND = {
+  id: Date.now().toString(),
+  startTime: Date.now()
+};
+
+/* ========================= */
+
 app.get("/", (req, res) => res.send("BIGWIN backend running"));
+
+/* ===== AUTH ===== */
 
 app.post("/register", async (req, res) => {
   try {
-    const user = await User.create({
+    await User.create({
       mobile: req.body.mobile,
       password: req.body.password,
-      wallet: 100,        // signup bonus added to wallet
+      wallet: 100,     // signup bonus
       bonus: 100,
-      deposited: false
+      deposited: false,
+      totalWagered: 0
     });
 
     res.json({ message: "Registered with ₹100 bonus" });
@@ -35,51 +48,110 @@ app.post("/register", async (req, res) => {
 });
 
 app.post("/login", async (req, res) => {
-  const user = await User.findOne(req.body);
+  const user = await User.findOne({
+    mobile: req.body.mobile,
+    password: req.body.password
+  });
+
   if (!user) return res.status(401).json({ error: "Invalid" });
 
-  const token = jwt.sign({ mobile: user.mobile }, process.env.JWT_SECRET);
+  const token = jwt.sign(
+    { mobile: user.mobile },
+    process.env.JWT_SECRET
+  );
+
   res.json({ token, wallet: user.wallet });
 });
+
+/* ===== WALLET ===== */
 
 app.get("/wallet", auth, async (req, res) => {
   const u = await User.findOne({ mobile: req.user.mobile });
   res.json({ wallet: u.wallet });
 });
 
+/* ===== ROUND ===== */
+
+app.get("/round/current", (req, res) => {
+  res.json(CURRENT_ROUND);
+});
+
+/* ===== BET ===== */
+
 app.post("/bet", auth, async (req, res) => {
-  const { color, amount, roundId } = req.body;
+  const { color, amount } = req.body;
   const u = await User.findOne({ mobile: req.user.mobile });
 
-  if (amount > u.wallet) return res.status(400).json({ error: "No balance" });
+  if (amount > u.wallet) {
+    return res.status(400).json({ error: "No balance" });
+  }
 
   u.wallet -= amount;
-  u.wagered += amount;
+  u.totalWagered += amount;
   await u.save();
 
-  await Bet.create({ mobile: u.mobile, color, amount, roundId });
+  await Bet.create({
+    mobile: u.mobile,
+    color,
+    amount,
+    roundId: CURRENT_ROUND.id
+  });
+
   res.json({ message: "Bet placed" });
 });
 
+/* ===== RESOLVE ROUND ===== */
+
 app.post("/round/resolve", async (req, res) => {
-  const bets = await Bet.find({ roundId: req.body.roundId });
+  const roundId = CURRENT_ROUND.id;
+  const bets = await Bet.find({ roundId });
+
   let red = 0, green = 0;
 
-  bets.forEach(b => b.color === "red" ? red += b.amount : green += b.amount);
-  const winner = red < green ? "red" : green < red ? "green" : Math.random() < .5 ? "red" : "green";
+  bets.forEach(b => {
+    if (b.color === "red") red += b.amount;
+    if (b.color === "green") green += b.amount;
+  });
+
+  let winner;
+  if (red === green) {
+    winner = Math.random() < 0.5 ? "red" : "green";
+  } else {
+    winner = red < green ? "red" : "green";
+  }
 
   for (const b of bets) {
     if (b.color === winner) {
       const payout = b.amount * 2 * 0.98;
-      const u = await User.findOne({ mobile: b.mobile });
-      u.wallet += payout;
-      await u.save();
+      await User.updateOne(
+        { mobile: b.mobile },
+        { $inc: { wallet: payout } }
+      );
     }
   }
 
-  await Round.create({ roundId: req.body.roundId, redPool: red, greenPool: green, winner });
-  res.json({ winner });
+  await Round.create({
+    roundId,
+    redPool: red,
+    greenPool: green,
+    winner
+  });
+
+  // 🔁 NEW ROUND
+  CURRENT_ROUND = {
+    id: Date.now().toString(),
+    startTime: Date.now()
+  };
+
+  res.json({
+    winner,
+    nextRoundId: CURRENT_ROUND.id
+  });
 });
 
+/* ===== START ===== */
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on", PORT));
+app.listen(PORT, () =>
+  console.log("Server running on", PORT)
+);
