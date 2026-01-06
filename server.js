@@ -83,6 +83,59 @@ app.get("/profile", auth, async (req, res) => {
   });
 });
 
+/* ===== SAVE WITHDRAW DETAILS ===== */
+
+app.post("/withdraw/details", auth, async (req, res) => {
+  const {
+    method,        // "upi" | "bank" | "usdt"
+    upiId,
+    bankName,
+    accountNumber,
+    ifsc,
+    accountHolder,
+    usdtAddress
+  } = req.body;
+
+  const user = await User.findOne({ mobile: req.user.mobile });
+
+  if (!method) {
+    return res.status(400).json({ error: "Withdraw method required" });
+  }
+
+  user.withdrawMethod = method;
+
+  // Reset old details
+  user.withdrawDetails = {};
+
+  if (method === "upi") {
+    if (!upiId) {
+      return res.status(400).json({ error: "UPI ID required" });
+    }
+    user.withdrawDetails.upiId = upiId;
+  }
+
+  if (method === "bank") {
+    if (!bankName || !accountNumber || !ifsc || !accountHolder) {
+      return res.status(400).json({ error: "Complete bank details required" });
+    }
+    user.withdrawDetails.bankName = bankName;
+    user.withdrawDetails.accountNumber = accountNumber;
+    user.withdrawDetails.ifsc = ifsc;
+    user.withdrawDetails.accountHolder = accountHolder;
+  }
+
+  if (method === "usdt") {
+    if (!usdtAddress) {
+      return res.status(400).json({ error: "USDT address required" });
+    }
+    user.withdrawDetails.usdtAddress = usdtAddress;
+  }
+
+  await user.save();
+
+  res.json({ message: "Withdrawal details saved successfully" });
+});
+
 /* ===== BET HISTORY ===== */
 
 app.get("/bets", auth, async (req, res) => {
