@@ -83,6 +83,20 @@ app.get("/profile", auth, async (req, res) => {
   });
 });
 
+/* ===== GET WITHDRAW DETAILS ===== */
+
+app.get("/withdraw/details", auth, async (req, res) => {
+  const user = await User.findOne({ mobile: req.user.mobile });
+
+  if (!user.withdrawMethod) {
+    return res.json({ method: null });
+  }
+
+  res.json({
+    method: user.withdrawMethod,
+    details: user.withdrawDetails
+  });
+});
 /* ===== SAVE WITHDRAW DETAILS ===== */
 
 app.post("/withdraw/details", auth, async (req, res) => {
