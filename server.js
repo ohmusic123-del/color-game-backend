@@ -266,6 +266,8 @@ app.post("/deposit", auth, async (req, res) => {
 
 /* ===== WITHDRAW ===== */
 
+const Withdraw = require("./models/Withdraw");
+
 app.post("/withdraw", auth, async (req, res) => {
   const { amount } = req.body;
   const user = await User.findOne({ mobile: req.user.mobile });
@@ -279,14 +281,15 @@ app.post("/withdraw", auth, async (req, res) => {
       error: "Deposit required before withdrawal"
     });
   }
-// ❌ Block withdrawal if no method saved
-if (!user.withdrawMethod) {
-  return res.status(400).json({
-    error: "Please add withdrawal details before withdrawing"
-  });
-}
-  const requiredWager = Math.max(user.bonus, user.depositAmount);
 
+  // ❌ Block if no withdraw method saved
+  if (!user.withdrawMethod) {
+    return res.status(400).json({
+      error: "Please add withdrawal details before withdrawing"
+    });
+  }
+
+  const requiredWager = Math.max(user.bonus, user.depositAmount);
   if (user.totalWagered < requiredWager) {
     return res.status(400).json({
       error: `Wager ₹${requiredWager - user.totalWagered} more to withdraw`
@@ -297,11 +300,22 @@ if (!user.withdrawMethod) {
     return res.status(400).json({ error: "Insufficient balance" });
   }
 
+  // ✅ CREATE WITHDRAW REQUEST (SNAPSHOT)
+  await Withdraw.create({
+    mobile: user.mobile,
+    amount,
+    method: user.withdrawMethod,
+    details: user.withdrawDetails
+  });
+
+  // 💰 Deduct wallet AFTER creating request
   user.wallet -= amount;
   await user.save();
 
-  res.json({ message: "Withdrawal request submitted" });
+  res.json({ message: "Withdrawal request submitted successfully" });
 });
+
+  
 
 /* ===== START ===== */
 
