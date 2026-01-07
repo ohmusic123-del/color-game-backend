@@ -279,7 +279,12 @@ app.post("/withdraw", auth, async (req, res) => {
       error: "Deposit required before withdrawal"
     });
   }
-
+// ❌ Block withdrawal if no method saved
+if (!user.withdrawMethod) {
+  return res.status(400).json({
+    error: "Please add withdrawal details before withdrawing"
+  });
+}
   const requiredWager = Math.max(user.bonus, user.depositAmount);
 
   if (user.totalWagered < requiredWager) {
