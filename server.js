@@ -5,14 +5,18 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 
+/* ===== MODELS ===== */
 const User = require("./models/User");
 const Bet = require("./models/Bet");
 const Round = require("./models/Round");
+const Withdraw = require("./models/Withdraw");
 
+/* ===== MIDDLEWARE ===== */
 const auth = require("./middleware/auth");
 
 const app = express();
 
+/* ===== ADMIN CONFIG ===== */
 const ADMIN_KEY = process.env.ADMIN_KEY || "bigwin_admin_123";
 
 function adminAuth(req, res, next) {
@@ -21,6 +25,8 @@ function adminAuth(req, res, next) {
   }
   next();
 }
+
+/* ===== APP SETUP ===== */
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -37,22 +43,24 @@ let CURRENT_ROUND = {
 
 app.get("/", (req, res) => res.send("BIGWIN backend running"));
 
-/* ===== AUTH ===== */
+/* =========================
+        AUTH
+========================= */
 
 app.post("/register", async (req, res) => {
   try {
     await User.create({
       mobile: req.body.mobile,
       password: req.body.password,
-      wallet: 100,     // signup bonus
+      wallet: 100,
       bonus: 100,
       deposited: false,
-      depositAmount: 0,   // ✅ REQUIRED
+      depositAmount: 0,
       totalWagered: 0
     });
 
     res.json({ message: "Registered with ₹100 bonus" });
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: "User exists" });
   }
 });
@@ -73,44 +81,48 @@ app.post("/login", async (req, res) => {
   res.json({ token, wallet: user.wallet });
 });
 
-/* ===== WALLET ===== */
+/* =========================
+        WALLET
+========================= */
 
 app.get("/wallet", auth, async (req, res) => {
   const u = await User.findOne({ mobile: req.user.mobile });
   res.json({ wallet: u.wallet });
 });
 
-/* ===== PROFILE ===== */
+/* =========================
+        PROFILE
+========================= */
 
 app.get("/profile", auth, async (req, res) => {
-  const user = await User.findOne({ mobile: req.user.mobile });
-
+  const u = await User.findOne({ mobile: req.user.mobile });
   res.json({
-    mobile: user.mobile,
-    wallet: user.wallet,
-    totalWagered: user.totalWagered
+    mobile: u.mobile,
+    wallet: u.wallet,
+    totalWagered: u.totalWagered
   });
 });
 
-/* ===== GET WITHDRAW DETAILS ===== */
+/* =========================
+   WITHDRAW DETAILS
+========================= */
 
 app.get("/withdraw/details", auth, async (req, res) => {
-  const user = await User.findOne({ mobile: req.user.mobile });
+  const u = await User.findOne({ mobile: req.user.mobile });
 
-  if (!user.withdrawMethod) {
+  if (!u.withdrawMethod) {
     return res.json({ method: null });
   }
 
   res.json({
-    method: user.withdrawMethod,
-    details: user.withdrawDetails
+    method: u.withdrawMethod,
+    details: u.withdrawDetails
   });
 });
-/* ===== SAVE WITHDRAW DETAILS ===== */
 
 app.post("/withdraw/details", auth, async (req, res) => {
   const {
-    method,        // "upi" | "bank" | "usdt"
+    method,
     upiId,
     bankName,
     accountNumber,
@@ -119,47 +131,41 @@ app.post("/withdraw/details", auth, async (req, res) => {
     usdtAddress
   } = req.body;
 
-  const user = await User.findOne({ mobile: req.user.mobile });
+  const u = await User.findOne({ mobile: req.user.mobile });
 
   if (!method) {
     return res.status(400).json({ error: "Withdraw method required" });
   }
 
-  user.withdrawMethod = method;
-
-  // Reset old details
-  user.withdrawDetails = {};
+  u.withdrawMethod = method;
+  u.withdrawDetails = {};
 
   if (method === "upi") {
-    if (!upiId) {
-      return res.status(400).json({ error: "UPI ID required" });
-    }
-    user.withdrawDetails.upiId = upiId;
+    if (!upiId) return res.status(400).json({ error: "UPI ID required" });
+    u.withdrawDetails.upiId = upiId;
   }
 
   if (method === "bank") {
     if (!bankName || !accountNumber || !ifsc || !accountHolder) {
       return res.status(400).json({ error: "Complete bank details required" });
     }
-    user.withdrawDetails.bankName = bankName;
-    user.withdrawDetails.accountNumber = accountNumber;
-    user.withdrawDetails.ifsc = ifsc;
-    user.withdrawDetails.accountHolder = accountHolder;
+    u.withdrawDetails = { bankName, accountNumber, ifsc, accountHolder };
   }
 
   if (method === "usdt") {
     if (!usdtAddress) {
       return res.status(400).json({ error: "USDT address required" });
     }
-    user.withdrawDetails.usdtAddress = usdtAddress;
+    u.withdrawDetails.usdtAddress = usdtAddress;
   }
 
-  await user.save();
-
+  await u.save();
   res.json({ message: "Withdrawal details saved successfully" });
 });
 
-/* ===== BET HISTORY ===== */
+/* =========================
+        BET HISTORY
+========================= */
 
 app.get("/bets", auth, async (req, res) => {
   const bets = await Bet.find({ mobile: req.user.mobile })
@@ -169,16 +175,19 @@ app.get("/bets", auth, async (req, res) => {
   res.json(bets);
 });
 
-/* ===== ROUND ===== */
+/* =========================
+        ROUND
+========================= */
 
 app.get("/round/current", (req, res) => {
   res.json(CURRENT_ROUND);
 });
-/* ===== BET ===== */
+
+/* =========================
+        BET
+========================= */
 
 app.post("/bet", auth, async (req, res) => {
-
-  // ⏱ Block betting after round ends
   const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
   if (elapsed >= 30) {
     return res.status(400).json({ error: "Round closed" });
@@ -205,56 +214,47 @@ app.post("/bet", auth, async (req, res) => {
   res.json({ message: "Bet placed" });
 });
 
-/* ===== RESOLVE ROUND ===== */
+/* =========================
+      RESOLVE ROUND
+========================= */
 
 app.post("/round/resolve", async (req, res) => {
-  const roundId = CURRENT_ROUND.id;
-  const bets = await Bet.find({ roundId });
+  const bets = await Bet.find({ roundId: CURRENT_ROUND.id });
 
   let red = 0, green = 0;
-
   bets.forEach(b => {
     if (b.color === "red") red += b.amount;
     if (b.color === "green") green += b.amount;
   });
 
-  let winner;
-  if (red === green) {
-    winner = Math.random() < 0.5 ? "red" : "green";
-  } else {
-    winner = red < green ? "red" : "green";
-  }
+  const winner =
+    red === green ? (Math.random() < 0.5 ? "red" : "green")
+                  : red < green ? "red" : "green";
 
   for (const b of bets) {
     if (b.color === winner) {
-      const payout = b.amount * 2 * 0.98;
       await User.updateOne(
         { mobile: b.mobile },
-        { $inc: { wallet: payout } }
+        { $inc: { wallet: b.amount * 2 * 0.98 } }
       );
     }
   }
 
   await Round.create({
-    roundId,
+    roundId: CURRENT_ROUND.id,
     redPool: red,
     greenPool: green,
     winner
   });
 
-  // 🔁 NEW ROUND
-  CURRENT_ROUND = {
-    id: Date.now().toString(),
-    startTime: Date.now()
-  };
+  CURRENT_ROUND = { id: Date.now().toString(), startTime: Date.now() };
 
-  res.json({
-    winner,
-    nextRoundId: CURRENT_ROUND.id
-  });
+  res.json({ winner, nextRoundId: CURRENT_ROUND.id });
 });
 
-/* ===== DEPOSIT ===== */
+/* =========================
+        DEPOSIT
+========================= */
 
 app.post("/deposit", auth, async (req, res) => {
   const { amount } = req.body;
@@ -262,74 +262,65 @@ app.post("/deposit", auth, async (req, res) => {
     return res.status(400).json({ error: "Minimum deposit ₹100" });
   }
 
-  const user = await User.findOne({ mobile: req.user.mobile });
+  const u = await User.findOne({ mobile: req.user.mobile });
+  u.wallet += amount;
+  u.deposited = true;
+  u.depositAmount += amount;
+  await u.save();
 
-  user.wallet += amount;
-  user.deposited = true;
-  user.depositAmount += amount;
-
-  await user.save();
-
-  res.json({ message: "Deposit successful", wallet: user.wallet });
+  res.json({ message: "Deposit successful", wallet: u.wallet });
 });
 
-/* ===== WITHDRAW ===== */
-
-const Withdraw = require("./models/Withdraw");
+/* =========================
+        WITHDRAW
+========================= */
 
 app.post("/withdraw", auth, async (req, res) => {
   const { amount } = req.body;
-  const user = await User.findOne({ mobile: req.user.mobile });
+  const u = await User.findOne({ mobile: req.user.mobile });
 
-  if (amount < 100) {
-    return res.status(400).json({ error: "Minimum withdrawal ₹100" });
+  if (amount < 100) return res.status(400).json({ error: "Minimum withdrawal ₹100" });
+  if (!u.deposited) return res.status(400).json({ error: "Deposit required" });
+  if (!u.withdrawMethod) {
+    return res.status(400).json({ error: "Please add withdrawal details before withdrawing" });
   }
 
-  if (!user.deposited) {
+  const requiredWager = Math.max(u.bonus, u.depositAmount);
+  if (u.totalWagered < requiredWager) {
     return res.status(400).json({
-      error: "Deposit required before withdrawal"
+      error: `Wager ₹${requiredWager - u.totalWagered} more to withdraw`
     });
   }
 
-  // ❌ Block if no withdraw method saved
-  if (!user.withdrawMethod) {
-    return res.status(400).json({
-      error: "Please add withdrawal details before withdrawing"
-    });
-  }
+  if (amount > u.wallet) return res.status(400).json({ error: "Insufficient balance" });
 
-  const requiredWager = Math.max(user.bonus, user.depositAmount);
-  if (user.totalWagered < requiredWager) {
-    return res.status(400).json({
-      error: `Wager ₹${requiredWager - user.totalWagered} more to withdraw`
-    });
-  }
-
-  if (amount > user.wallet) {
-    return res.status(400).json({ error: "Insufficient balance" });
-  }
-
-  // ✅ CREATE WITHDRAW REQUEST (SNAPSHOT)
   await Withdraw.create({
-    mobile: user.mobile,
+    mobile: u.mobile,
     amount,
-    method: user.withdrawMethod,
-    details: user.withdrawDetails
+    method: u.withdrawMethod,
+    details: u.withdrawDetails
   });
 
-  // 💰 Deduct wallet AFTER creating request
-  user.wallet -= amount;
-  await user.save();
+  u.wallet -= amount;
+  await u.save();
 
   res.json({ message: "Withdrawal request submitted successfully" });
 });
 
-  
+/* =========================
+        ADMIN
+========================= */
 
-/* ===== START ===== */
+app.get("/admin/withdraws", adminAuth, async (req, res) => {
+  const withdraws = await Withdraw.find().sort({ createdAt: -1 });
+  res.json(withdraws);
+});
+
+/* =========================
+        START
+========================= */
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log("Server running on", PORT)
-);
-  
+app.listen(PORT, () => {
+  console.log("Server running on", PORT);
+});
