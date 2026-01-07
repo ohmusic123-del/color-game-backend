@@ -221,7 +221,59 @@ app.post("/round/resolve", async (req, res) => {
 
   res.json({ roundId, winner, nextRoundId: CURRENT_ROUND.id });
 });
+/* =========================
+   AUTO ROUND TIMER (30s)
+========================= */
+setInterval(async () => {
+  const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
 
+  if (elapsed < 30) return;
+
+  console.log("⏱ Auto resolving round:", CURRENT_ROUND.id);
+
+  const roundId = CURRENT_ROUND.id;
+  const bets = await Bet.find({ roundId });
+
+  let redPool = 0;
+  let greenPool = 0;
+
+  bets.forEach(b => {
+    if (b.color === "red") redPool += b.amount;
+    if (b.color === "green") greenPool += b.amount;
+  });
+
+  let winner =
+    redPool === greenPool
+      ? Math.random() < 0.5 ? "red" : "green"
+      : redPool < greenPool ? "red" : "green";
+
+  for (const bet of bets) {
+    if (bet.color === winner) {
+      bet.status = "WON";
+      await User.updateOne(
+        { mobile: bet.mobile },
+        { $inc: { wallet: bet.amount * 2 * 0.98 } }
+      );
+    } else {
+      bet.status = "LOST";
+    }
+    await bet.save();
+  }
+
+  await Round.create({
+    roundId,
+    redPool,
+    greenPool,
+    winner
+  });
+
+  CURRENT_ROUND = {
+    id: Date.now().toString(),
+    startTime: Date.now()
+  };
+
+  console.log("✅ New round started:", CURRENT_ROUND.id);
+}, 1000);
 /* =========================
         ADMIN
 ========================= */
