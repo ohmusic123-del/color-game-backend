@@ -5,6 +5,9 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 
+/* ===== APP INIT (MUST BE FIRST) ===== */
+const app = express();
+
 /* ===== MODELS ===== */
 const User = require("./models/User");
 const Bet = require("./models/Bet");
@@ -13,8 +16,6 @@ const Withdraw = require("./models/Withdraw");
 
 /* ===== MIDDLEWARE ===== */
 const auth = require("./middleware/auth");
-
-const app = express();
 
 /* ===== ADMIN CONFIG ===== */
 const ADMIN_KEY = process.env.ADMIN_KEY || "bigwin_admin_123";
@@ -44,6 +45,18 @@ let CURRENT_ROUND = {
 ========================= */
 app.get("/", (req, res) => {
   res.send("BIGWIN backend running");
+});
+
+/* =========================
+   ROUND HISTORY (LAST 20)
+========================= */
+app.get("/rounds/history", async (req, res) => {
+  const rounds = await Round.find()
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .select("roundId winner createdAt");
+
+  res.json(rounds);
 });
 
 /* =========================
@@ -100,63 +113,7 @@ app.get("/profile", auth, async (req, res) => {
 });
 
 /* =========================
-   WITHDRAW DETAILS
-========================= */
-app.get("/withdraw/details", auth, async (req, res) => {
-  const u = await User.findOne({ mobile: req.user.mobile });
-
-  if (!u.withdrawMethod) {
-    return res.json({ method: null });
-  }
-
-  res.json({
-    method: u.withdrawMethod,
-    details: u.withdrawDetails
-  });
-});
-
-app.post("/withdraw/details", auth, async (req, res) => {
-  const {
-    method,
-    upiId,
-    bankName,
-    accountNumber,
-    ifsc,
-    accountHolder,
-    usdtAddress
-  } = req.body;
-
-  const u = await User.findOne({ mobile: req.user.mobile });
-  if (!method) return res.status(400).json({ error: "Withdraw method required" });
-
-  u.withdrawMethod = method;
-  u.withdrawDetails = {};
-
-  if (method === "upi") {
-    if (!upiId) return res.status(400).json({ error: "UPI ID required" });
-    u.withdrawDetails.upiId = upiId;
-  }
-
-  if (method === "bank") {
-    if (!bankName || !accountNumber || !ifsc || !accountHolder) {
-      return res.status(400).json({ error: "Complete bank details required" });
-    }
-    u.withdrawDetails = { bankName, accountNumber, ifsc, accountHolder };
-  }
-
-  if (method === "usdt") {
-    if (!usdtAddress) {
-      return res.status(400).json({ error: "USDT address required" });
-    }
-    u.withdrawDetails.usdtAddress = usdtAddress;
-  }
-
-  await u.save();
-  res.json({ message: "Withdrawal details saved successfully" });
-});
-
-/* =========================
-        BET HISTORY
+        BET HISTORY (USER)
 ========================= */
 app.get("/bets", auth, async (req, res) => {
   const bets = await Bet.find({ mobile: req.user.mobile })
@@ -219,21 +176,17 @@ app.post("/round/resolve", async (req, res) => {
     if (b.color === "green") greenPool += b.amount;
   });
 
-  let winner;
-  if (redPool === greenPool) {
-    winner = Math.random() < 0.5 ? "red" : "green";
-  } else {
-    winner = redPool < greenPool ? "red" : "green";
-  }
+  const winner =
+    redPool === greenPool
+      ? Math.random() < 0.5 ? "red" : "green"
+      : redPool < greenPool ? "red" : "green";
 
   for (const bet of bets) {
     if (bet.color === winner) {
       bet.status = "WON";
-      const payout = bet.amount * 2 * 0.98;
-
       await User.updateOne(
         { mobile: bet.mobile },
-        { $inc: { wallet: payout } }
+        { $inc: { wallet: bet.amount * 2 * 0.98 } }
       );
     } else {
       bet.status = "LOST";
@@ -253,64 +206,7 @@ app.post("/round/resolve", async (req, res) => {
     startTime: Date.now()
   };
 
-  res.json({
-    roundId,
-    winner,
-    nextRoundId: CURRENT_ROUND.id
-  });
-});
-
-/* =========================
-        DEPOSIT
-========================= */
-app.post("/deposit", auth, async (req, res) => {
-  const { amount } = req.body;
-  if (amount < 100) {
-    return res.status(400).json({ error: "Minimum deposit ₹100" });
-  }
-
-  const u = await User.findOne({ mobile: req.user.mobile });
-  u.wallet += amount;
-  u.deposited = true;
-  u.depositAmount += amount;
-  await u.save();
-
-  res.json({ message: "Deposit successful", wallet: u.wallet });
-});
-
-/* =========================
-        WITHDRAW
-========================= */
-app.post("/withdraw", auth, async (req, res) => {
-  const { amount } = req.body;
-  const u = await User.findOne({ mobile: req.user.mobile });
-
-  if (amount < 100) return res.status(400).json({ error: "Minimum withdrawal ₹100" });
-  if (!u.deposited) return res.status(400).json({ error: "Deposit required" });
-  if (!u.withdrawMethod) {
-    return res.status(400).json({ error: "Add withdrawal details first" });
-  }
-
-  const requiredWager = Math.max(u.bonus, u.depositAmount);
-  if (u.totalWagered < requiredWager) {
-    return res.status(400).json({
-      error: `Wager ₹${requiredWager - u.totalWagered} more`
-    });
-  }
-
-  if (amount > u.wallet) return res.status(400).json({ error: "Insufficient balance" });
-
-  await Withdraw.create({
-    mobile: u.mobile,
-    amount,
-    method: u.withdrawMethod,
-    details: u.withdrawDetails
-  });
-
-  u.wallet -= amount;
-  await u.save();
-
-  res.json({ message: "Withdrawal request submitted" });
+  res.json({ roundId, winner, nextRoundId: CURRENT_ROUND.id });
 });
 
 /* =========================
@@ -319,34 +215,6 @@ app.post("/withdraw", auth, async (req, res) => {
 app.get("/admin/withdraws", adminAuth, async (req, res) => {
   const withdraws = await Withdraw.find().sort({ createdAt: -1 });
   res.json(withdraws);
-});
-
-app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
-  const { status, adminNote } = req.body;
-
-  if (!["APPROVED", "REJECTED"].includes(status)) {
-    return res.status(400).json({ error: "Invalid status" });
-  }
-
-  const withdraw = await Withdraw.findById(req.params.id);
-  if (!withdraw) return res.status(404).json({ error: "Withdraw not found" });
-  if (withdraw.status !== "PENDING") {
-    return res.status(400).json({ error: "Already processed" });
-  }
-
-  withdraw.status = status;
-  withdraw.adminNote = adminNote || "";
-  withdraw.processedAt = new Date();
-
-  if (status === "REJECTED") {
-    await User.updateOne(
-      { mobile: withdraw.mobile },
-      { $inc: { wallet: withdraw.amount } }
-    );
-  }
-
-  await withdraw.save();
-  res.json({ message: `Withdraw ${status.toLowerCase()}` });
 });
 
 /* =========================
