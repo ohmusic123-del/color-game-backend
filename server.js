@@ -39,14 +39,16 @@ let CURRENT_ROUND = {
   startTime: Date.now()
 };
 
-/* ========================= */
-
-app.get("/", (req, res) => res.send("BIGWIN backend running"));
+/* =========================
+        BASIC
+========================= */
+app.get("/", (req, res) => {
+  res.send("BIGWIN backend running");
+});
 
 /* =========================
         AUTH
 ========================= */
-
 app.post("/register", async (req, res) => {
   try {
     await User.create({
@@ -58,7 +60,6 @@ app.post("/register", async (req, res) => {
       depositAmount: 0,
       totalWagered: 0
     });
-
     res.json({ message: "Registered with ₹100 bonus" });
   } catch {
     res.status(400).json({ error: "User exists" });
@@ -71,7 +72,7 @@ app.post("/login", async (req, res) => {
     password: req.body.password
   });
 
-  if (!user) return res.status(401).json({ error: "Invalid" });
+  if (!user) return res.status(401).json({ error: "Invalid credentials" });
 
   const token = jwt.sign(
     { mobile: user.mobile },
@@ -82,17 +83,12 @@ app.post("/login", async (req, res) => {
 });
 
 /* =========================
-        WALLET
+        WALLET / PROFILE
 ========================= */
-
 app.get("/wallet", auth, async (req, res) => {
   const u = await User.findOne({ mobile: req.user.mobile });
   res.json({ wallet: u.wallet });
 });
-
-/* =========================
-        PROFILE
-========================= */
 
 app.get("/profile", auth, async (req, res) => {
   const u = await User.findOne({ mobile: req.user.mobile });
@@ -106,7 +102,6 @@ app.get("/profile", auth, async (req, res) => {
 /* =========================
    WITHDRAW DETAILS
 ========================= */
-
 app.get("/withdraw/details", auth, async (req, res) => {
   const u = await User.findOne({ mobile: req.user.mobile });
 
@@ -132,10 +127,7 @@ app.post("/withdraw/details", auth, async (req, res) => {
   } = req.body;
 
   const u = await User.findOne({ mobile: req.user.mobile });
-
-  if (!method) {
-    return res.status(400).json({ error: "Withdraw method required" });
-  }
+  if (!method) return res.status(400).json({ error: "Withdraw method required" });
 
   u.withdrawMethod = method;
   u.withdrawDetails = {};
@@ -166,11 +158,10 @@ app.post("/withdraw/details", auth, async (req, res) => {
 /* =========================
         BET HISTORY
 ========================= */
-
 app.get("/bets", auth, async (req, res) => {
   const bets = await Bet.find({ mobile: req.user.mobile })
     .sort({ createdAt: -1 })
-    .limit(10);
+    .limit(20);
 
   res.json(bets);
 });
@@ -178,15 +169,13 @@ app.get("/bets", auth, async (req, res) => {
 /* =========================
         ROUND
 ========================= */
-
 app.get("/round/current", (req, res) => {
   res.json(CURRENT_ROUND);
 });
 
 /* =========================
-        BET
+        PLACE BET
 ========================= */
-
 app.post("/bet", auth, async (req, res) => {
   const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
   if (elapsed >= 30) {
@@ -197,7 +186,7 @@ app.post("/bet", auth, async (req, res) => {
   const u = await User.findOne({ mobile: req.user.mobile });
 
   if (amount > u.wallet) {
-    return res.status(400).json({ error: "No balance" });
+    return res.status(400).json({ error: "Insufficient balance" });
   }
 
   u.wallet -= amount;
@@ -208,54 +197,72 @@ app.post("/bet", auth, async (req, res) => {
     mobile: u.mobile,
     color,
     amount,
-    roundId: CURRENT_ROUND.id
+    roundId: CURRENT_ROUND.id,
+    status: "PENDING"
   });
 
-  res.json({ message: "Bet placed" });
+  res.json({ message: "Bet placed", roundId: CURRENT_ROUND.id });
 });
 
 /* =========================
-      RESOLVE ROUND
+        RESOLVE ROUND
 ========================= */
-
 app.post("/round/resolve", async (req, res) => {
-  const bets = await Bet.find({ roundId: CURRENT_ROUND.id });
+  const roundId = CURRENT_ROUND.id;
+  const bets = await Bet.find({ roundId });
 
-  let red = 0, green = 0;
+  let redPool = 0;
+  let greenPool = 0;
+
   bets.forEach(b => {
-    if (b.color === "red") red += b.amount;
-    if (b.color === "green") green += b.amount;
+    if (b.color === "red") redPool += b.amount;
+    if (b.color === "green") greenPool += b.amount;
   });
 
-  const winner =
-    red === green ? (Math.random() < 0.5 ? "red" : "green")
-                  : red < green ? "red" : "green";
+  let winner;
+  if (redPool === greenPool) {
+    winner = Math.random() < 0.5 ? "red" : "green";
+  } else {
+    winner = redPool < greenPool ? "red" : "green";
+  }
 
-  for (const b of bets) {
-    if (b.color === winner) {
+  for (const bet of bets) {
+    if (bet.color === winner) {
+      bet.status = "WON";
+      const payout = bet.amount * 2 * 0.98;
+
       await User.updateOne(
-        { mobile: b.mobile },
-        { $inc: { wallet: b.amount * 2 * 0.98 } }
+        { mobile: bet.mobile },
+        { $inc: { wallet: payout } }
       );
+    } else {
+      bet.status = "LOST";
     }
+    await bet.save();
   }
 
   await Round.create({
-    roundId: CURRENT_ROUND.id,
-    redPool: red,
-    greenPool: green,
+    roundId,
+    redPool,
+    greenPool,
     winner
   });
 
-  CURRENT_ROUND = { id: Date.now().toString(), startTime: Date.now() };
+  CURRENT_ROUND = {
+    id: Date.now().toString(),
+    startTime: Date.now()
+  };
 
-  res.json({ winner, nextRoundId: CURRENT_ROUND.id });
+  res.json({
+    roundId,
+    winner,
+    nextRoundId: CURRENT_ROUND.id
+  });
 });
 
 /* =========================
         DEPOSIT
 ========================= */
-
 app.post("/deposit", auth, async (req, res) => {
   const { amount } = req.body;
   if (amount < 100) {
@@ -274,7 +281,6 @@ app.post("/deposit", auth, async (req, res) => {
 /* =========================
         WITHDRAW
 ========================= */
-
 app.post("/withdraw", auth, async (req, res) => {
   const { amount } = req.body;
   const u = await User.findOne({ mobile: req.user.mobile });
@@ -282,13 +288,13 @@ app.post("/withdraw", auth, async (req, res) => {
   if (amount < 100) return res.status(400).json({ error: "Minimum withdrawal ₹100" });
   if (!u.deposited) return res.status(400).json({ error: "Deposit required" });
   if (!u.withdrawMethod) {
-    return res.status(400).json({ error: "Please add withdrawal details before withdrawing" });
+    return res.status(400).json({ error: "Add withdrawal details first" });
   }
 
   const requiredWager = Math.max(u.bonus, u.depositAmount);
   if (u.totalWagered < requiredWager) {
     return res.status(400).json({
-      error: `Wager ₹${requiredWager - u.totalWagered} more to withdraw`
+      error: `Wager ₹${requiredWager - u.totalWagered} more`
     });
   }
 
@@ -304,13 +310,12 @@ app.post("/withdraw", auth, async (req, res) => {
   u.wallet -= amount;
   await u.save();
 
-  res.json({ message: "Withdrawal request submitted successfully" });
+  res.json({ message: "Withdrawal request submitted" });
 });
 
 /* =========================
         ADMIN
 ========================= */
-
 app.get("/admin/withdraws", adminAuth, async (req, res) => {
   const withdraws = await Withdraw.find().sort({ createdAt: -1 });
   res.json(withdraws);
@@ -319,16 +324,12 @@ app.get("/admin/withdraws", adminAuth, async (req, res) => {
 app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
   const { status, adminNote } = req.body;
 
-  // ✅ VALIDATE FIRST
   if (!["APPROVED", "REJECTED"].includes(status)) {
     return res.status(400).json({ error: "Invalid status" });
   }
 
   const withdraw = await Withdraw.findById(req.params.id);
-  if (!withdraw) {
-    return res.status(404).json({ error: "Withdraw request not found" });
-  }
-
+  if (!withdraw) return res.status(404).json({ error: "Withdraw not found" });
   if (withdraw.status !== "PENDING") {
     return res.status(400).json({ error: "Already processed" });
   }
@@ -337,7 +338,6 @@ app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
   withdraw.adminNote = adminNote || "";
   withdraw.processedAt = new Date();
 
-  // 🔁 REFUND IF REJECTED
   if (status === "REJECTED") {
     await User.updateOne(
       { mobile: withdraw.mobile },
@@ -346,15 +346,12 @@ app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
   }
 
   await withdraw.save();
-
   res.json({ message: `Withdraw ${status.toLowerCase()}` });
 });
-    
 
 /* =========================
         START
 ========================= */
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on", PORT);
