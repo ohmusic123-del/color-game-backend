@@ -129,7 +129,20 @@ app.get("/bets", auth, async (req, res) => {
 app.get("/round/current", (req, res) => {
   res.json(CURRENT_ROUND);
 });
+/* =========================
+   CURRENT ROUND USER BETS
+========================= */
+app.get("/bets/current", auth, async (req, res) => {
+  const bets = await Bet.find({
+    mobile: req.user.mobile,
+    roundId: CURRENT_ROUND.id
+  }).sort({ createdAt: -1 });
 
+  res.json({
+    roundId: CURRENT_ROUND.id,
+    bets
+  });
+});
 /* =========================
         PLACE BET
 ========================= */
