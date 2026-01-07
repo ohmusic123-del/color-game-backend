@@ -316,6 +316,41 @@ app.get("/admin/withdraws", adminAuth, async (req, res) => {
   res.json(withdraws);
 });
 
+app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
+  const { status, adminNote } = req.body;
+
+  // ✅ VALIDATE FIRST
+  if (!["APPROVED", "REJECTED"].includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+
+  const withdraw = await Withdraw.findById(req.params.id);
+  if (!withdraw) {
+    return res.status(404).json({ error: "Withdraw request not found" });
+  }
+
+  if (withdraw.status !== "PENDING") {
+    return res.status(400).json({ error: "Already processed" });
+  }
+
+  withdraw.status = status;
+  withdraw.adminNote = adminNote || "";
+  withdraw.processedAt = new Date();
+
+  // 🔁 REFUND IF REJECTED
+  if (status === "REJECTED") {
+    await User.updateOne(
+      { mobile: withdraw.mobile },
+      { $inc: { wallet: withdraw.amount } }
+    );
+  }
+
+  await withdraw.save();
+
+  res.json({ message: `Withdraw ${status.toLowerCase()}` });
+});
+    
+
 /* =========================
         START
 ========================= */
