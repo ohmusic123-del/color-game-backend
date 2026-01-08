@@ -309,7 +309,44 @@ app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
   await w.save();
   res.json({ message: `Withdraw ${status.toLowerCase()}` });
 });
+/* =========================
+   ADMIN DASHBOARD STATS
+========================= */
+app.get("/admin/stats", adminAuth, async (req, res) => {
+  const totalUsers = await User.countDocuments();
 
+  const totalDepositsAgg = await User.aggregate([
+    { $group: { _id: null, total: { $sum: "$depositAmount" } } }
+  ]);
+
+  const totalDeposits = totalDepositsAgg[0]?.total || 0;
+
+  const totalWithdrawAgg = await Withdraw.aggregate([
+    { $match: { status: "APPROVED" } },
+    { $group: { _id: null, total: { $sum: "$amount" } } }
+  ]);
+
+  const totalWithdrawals = totalWithdrawAgg[0]?.total || 0;
+
+  const totalWalletAgg = await User.aggregate([
+    { $group: { _id: null, total: { $sum: "$wallet" } } }
+  ]);
+
+  const totalWallet = totalWalletAgg[0]?.total || 0;
+
+  const totalRounds = await Round.countDocuments();
+
+  const profit = totalDeposits - totalWithdrawals;
+
+  res.json({
+    totalUsers,
+    totalDeposits,
+    totalWithdrawals,
+    totalWallet,
+    totalRounds,
+    profit
+  });
+});
 /* =========================
    START
 ========================= */
