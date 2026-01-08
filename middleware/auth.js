@@ -8,7 +8,11 @@ module.exports = (req, res, next) => {
       return res.status(401).json({ error: "Token missing" });
     }
 
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Attach user info to request
+    req.user = decoded;
+
     next();
   } catch (err) {
     return res.status(401).json({ error: "Unauthorized" });
