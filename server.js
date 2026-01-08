@@ -242,7 +242,56 @@ setInterval(async () => {
     await resolveRound();
   }
 }, 1000);
+const Deposit = require("./models/Deposit");
 
+app.post("/deposit/request", auth, async (req, res) => {
+  const { amount, utr } = req.body;
+
+  if (!amount || !utr) {
+    return res.status(400).json({ error: "Amount and UTR required" });
+  }
+
+  await Deposit.create({
+    mobile: req.user.mobile,
+    amount,
+    utr
+  });
+
+  res.json({ message: "Deposit request submitted. Waiting for approval." });
+});
+
+     app.get("/admin/deposits", adminAuth, async (req, res) => {
+  const list = await Deposit.find().sort({ createdAt: -1 });
+  res.json(list);
+});
+
+app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
+  const { status } = req.body; // APPROVED | REJECTED
+
+  if (!["APPROVED", "REJECTED"].includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+
+  const d = await Deposit.findById(req.params.id);
+  if (!d || d.status !== "PENDING") {
+    return res.status(400).json({ error: "Invalid request" });
+  }
+
+  d.status = status;
+  await d.save();
+
+  if (status === "APPROVED") {
+    await User.updateOne(
+      { mobile: d.mobile },
+      {
+        $inc: { wallet: d.amount, depositAmount: d.amount },
+        $set: { deposited: true }
+      }
+    );
+  }
+
+  res.json({ message: `Deposit ${status.toLowerCase()}` });
+});
 /* =========================
    WITHDRAW (USER)
 ========================= */
