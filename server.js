@@ -244,11 +244,11 @@ setInterval(async () => {
 }, 1000);
 const Deposit = require("./models/Deposit");
 
-app.post("/deposit/request", auth, async (req, res) => {
+app.post("/deposit", auth, async (req, res) => {
   const { amount, utr } = req.body;
 
-  if (!amount || !utr) {
-    return res.status(400).json({ error: "Amount and UTR required" });
+  if (amount < 100) {
+    return res.status(400).json({ error: "Minimum deposit ₹100" });
   }
 
   await Deposit.create({
@@ -257,24 +257,16 @@ app.post("/deposit/request", auth, async (req, res) => {
     utr
   });
 
-  res.json({ message: "Deposit request submitted. Waiting for approval." });
+  res.json({ message: "Deposit request submitted" });
 });
-
-     app.get("/admin/deposits", adminAuth, async (req, res) => {
-  const list = await Deposit.find().sort({ createdAt: -1 });
-  res.json(list);
-});
-
 app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
-  const { status } = req.body; // APPROVED | REJECTED
-
-  if (!["APPROVED", "REJECTED"].includes(status)) {
-    return res.status(400).json({ error: "Invalid status" });
-  }
+  const { status } = req.body;
 
   const d = await Deposit.findById(req.params.id);
-  if (!d || d.status !== "PENDING") {
-    return res.status(400).json({ error: "Invalid request" });
+  if (!d) return res.status(404).json({ error: "Not found" });
+
+  if (d.status !== "PENDING") {
+    return res.status(400).json({ error: "Already processed" });
   }
 
   d.status = status;
@@ -284,7 +276,10 @@ app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
     await User.updateOne(
       { mobile: d.mobile },
       {
-        $inc: { wallet: d.amount, depositAmount: d.amount },
+        $inc: {
+          wallet: d.amount,
+          depositAmount: d.amount
+        },
         $set: { deposited: true }
       }
     );
@@ -292,6 +287,36 @@ app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
 
   res.json({ message: `Deposit ${status.toLowerCase()}` });
 });
+app.get("/deposits", auth, async (req, res) => {
+  const deposits = await Deposit.find({
+    mobile: req.user.mobile
+  })
+    .sort({ createdAt: -1 })
+    .limit(10);
+
+  res.json(deposits);
+});
+async function loadDeposits() {
+  const res = await fetch(API + "/deposits", {
+    headers: { Authorization: token }
+  });
+
+  const data = await res.json();
+  const box = document.getElementById("depositHistory");
+  box.innerHTML = "";
+
+  data.forEach(d => {
+    box.innerHTML += `
+      <div class="row">
+        ₹${d.amount} |
+        ${d.status} |
+        ${new Date(d.createdAt).toLocaleString()}
+      </div>
+    `;
+  });
+}
+
+loadDeposits();
 /* =========================
    WITHDRAW (USER)
 ========================= */
