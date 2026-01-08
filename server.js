@@ -1,6 +1,6 @@
 require("dotenv").config();
 require("./db");
-
+const AdminSettings = require("./models/AdminSettings");
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -193,7 +193,10 @@ app.get("/rounds/history", async (req, res) => {
     .select("roundId winner createdAt");
   res.json(rounds);
 });
-
+app.get("/deposit/info", async (req, res) => {
+  const settings = await AdminSettings.findOne();
+  res.json(settings || {});
+});
 /* =========================
    RESOLVE ROUND
 ========================= */
@@ -420,6 +423,22 @@ app.get("/admin/stats", adminAuth, async (req, res) => {
     totalRounds,
     profit
   });
+});
+app.post("/admin/deposit-info", adminAuth, async (req, res) => {
+  const { upiId, qrImage } = req.body;
+
+  let settings = await AdminSettings.findOne();
+
+  if (!settings) {
+    settings = new AdminSettings({ upiId, qrImage });
+  } else {
+    settings.upiId = upiId;
+    settings.qrImage = qrImage;
+    settings.updatedAt = new Date();
+  }
+
+  await settings.save();
+  res.json({ message: "Deposit info updated" });
 });
 /* =========================
    START
