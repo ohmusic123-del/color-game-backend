@@ -4,8 +4,9 @@ const userSchema = new mongoose.Schema(
   {
     mobile: {
       type: String,
+      required: true,
       unique: true,
-      required: true
+      index: true
     },
 
     password: {
@@ -13,6 +14,9 @@ const userSchema = new mongoose.Schema(
       required: true
     },
 
+    /* ======================
+       WALLET
+    ====================== */
     wallet: {
       type: Number,
       default: 0
@@ -28,6 +32,9 @@ const userSchema = new mongoose.Schema(
       default: 0
     },
 
+    /* ======================
+       DEPOSIT INFO
+    ====================== */
     deposited: {
       type: Boolean,
       default: false
@@ -41,10 +48,9 @@ const userSchema = new mongoose.Schema(
     /* ======================
        WITHDRAW DETAILS
     ====================== */
-
     withdrawMethod: {
       type: String,
-      enum: ["upi", "bank", "usdt"], // ✅ SAFE
+      enum: ["upi", "bank", "usdt"],
       default: null
     },
 
@@ -59,9 +65,7 @@ const userSchema = new mongoose.Schema(
       usdtAddress: String
     }
   },
-  {
-    timestamps: true // ✅ adds createdAt & updatedAt
-  }
+  { timestamps: true }
 );
 
 module.exports = mongoose.model("User", userSchema);
