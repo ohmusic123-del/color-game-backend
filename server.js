@@ -1,6 +1,6 @@
 require("dotenv").config();
 require("./db");
-const AdminSettings = require("./models/AdminSettings");
+
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -20,10 +20,13 @@ const Withdraw = require("./models/Withdraw");
 ========================= */
 const auth = require("./middleware/auth");
 
+/* ---------- Admin Auth ---------- */
 function adminAuth(req, res, next) {
   try {
     const token = req.headers.authorization;
-    if (!token) return res.status(401).json({ error: "Admin token missing" });
+    if (!token) {
+      return res.status(401).json({ error: "Admin token missing" });
+    }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     if (decoded.role !== "admin") {
@@ -33,7 +36,7 @@ function adminAuth(req, res, next) {
     req.admin = decoded;
     next();
   } catch {
-    res.status(401).json({ error: "Invalid admin token" });
+    return res.status(401).json({ error: "Invalid admin token" });
   }
 }
 
@@ -60,7 +63,7 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   AUTH (USER)
+   AUTH — USER
 ========================= */
 app.post("/register", async (req, res) => {
   try {
@@ -75,7 +78,7 @@ app.post("/register", async (req, res) => {
     });
     res.json({ message: "Registered with ₹100 bonus" });
   } catch {
-    res.status(400).json({ error: "User exists" });
+    res.status(400).json({ error: "User already exists" });
   }
 });
 
@@ -85,7 +88,9 @@ app.post("/login", async (req, res) => {
     password: req.body.password
   });
 
-  if (!user) return res.status(401).json({ error: "Invalid credentials" });
+  if (!user) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
 
   const token = jwt.sign(
     { mobile: user.mobile },
@@ -96,7 +101,7 @@ app.post("/login", async (req, res) => {
 });
 
 /* =========================
-   ADMIN LOGIN
+   AUTH — ADMIN
 ========================= */
 app.post("/admin/login", (req, res) => {
   const { username, password } = req.body;
@@ -110,6 +115,7 @@ app.post("/admin/login", (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "12h" }
     );
+
     return res.json({ token });
   }
 
@@ -158,18 +164,18 @@ app.post("/bet", auth, async (req, res) => {
   }
 
   const { color, amount } = req.body;
-  const u = await User.findOne({ mobile: req.user.mobile });
+  const user = await User.findOne({ mobile: req.user.mobile });
 
-  if (amount > u.wallet) {
+  if (amount > user.wallet) {
     return res.status(400).json({ error: "Insufficient balance" });
   }
 
-  u.wallet -= amount;
-  u.totalWagered += amount;
-  await u.save();
+  user.wallet -= amount;
+  user.totalWagered += amount;
+  await user.save();
 
   await Bet.create({
-    mobile: u.mobile,
+    mobile: user.mobile,
     color,
     amount,
     roundId: CURRENT_ROUND.id,
@@ -191,20 +197,19 @@ app.get("/rounds/history", async (req, res) => {
     .sort({ createdAt: -1 })
     .limit(20)
     .select("roundId winner createdAt");
+
   res.json(rounds);
 });
-app.get("/deposit/info", async (req, res) => {
-  const settings = await AdminSettings.findOne();
-  res.json(settings || {});
-});
+
 /* =========================
-   RESOLVE ROUND
+   ROUND RESOLUTION
 ========================= */
 async function resolveRound() {
   const roundId = CURRENT_ROUND.id;
   const bets = await Bet.find({ roundId });
 
-  let redPool = 0, greenPool = 0;
+  let redPool = 0;
+  let greenPool = 0;
 
   bets.forEach(b => {
     if (b.color === "red") redPool += b.amount;
@@ -237,122 +242,49 @@ async function resolveRound() {
   };
 }
 
-/* AUTO ROUND EVERY 30s */
+/* =========================
+   AUTO ROUND TIMER (30s)
+========================= */
 setInterval(async () => {
   const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
   if (elapsed >= 30) {
-    console.log("⏱ Resolving round:", CURRENT_ROUND.id);
     await resolveRound();
   }
 }, 1000);
-const Deposit = require("./models/Deposit");
 
-app.post("/deposit", auth, async (req, res) => {
-  const { amount, utr } = req.body;
-
-  if (amount < 100) {
-    return res.status(400).json({ error: "Minimum deposit ₹100" });
-  }
-
-  await Deposit.create({
-    mobile: req.user.mobile,
-    amount,
-    utr
-  });
-
-  res.json({ message: "Deposit request submitted" });
-});
-app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
-  const { status } = req.body;
-
-  const d = await Deposit.findById(req.params.id);
-  if (!d) return res.status(404).json({ error: "Not found" });
-
-  if (d.status !== "PENDING") {
-    return res.status(400).json({ error: "Already processed" });
-  }
-
-  d.status = status;
-  await d.save();
-
-  if (status === "APPROVED") {
-    await User.updateOne(
-      { mobile: d.mobile },
-      {
-        $inc: {
-          wallet: d.amount,
-          depositAmount: d.amount
-        },
-        $set: { deposited: true }
-      }
-    );
-  }
-
-  res.json({ message: `Deposit ${status.toLowerCase()}` });
-});
-app.get("/deposits", auth, async (req, res) => {
-  const deposits = await Deposit.find({
-    mobile: req.user.mobile
-  })
-    .sort({ createdAt: -1 })
-    .limit(10);
-
-  res.json(deposits);
-});
-async function loadDeposits() {
-  const res = await fetch(API + "/deposits", {
-    headers: { Authorization: token }
-  });
-
-  const data = await res.json();
-  const box = document.getElementById("depositHistory");
-  box.innerHTML = "";
-
-  data.forEach(d => {
-    box.innerHTML += `
-      <div class="row">
-        ₹${d.amount} |
-        ${d.status} |
-        ${new Date(d.createdAt).toLocaleString()}
-      </div>
-    `;
-  });
-}
-
-loadDeposits();
 /* =========================
-   WITHDRAW (USER)
+   WITHDRAW — USER
 ========================= */
 app.post("/withdraw", auth, async (req, res) => {
   const { amount } = req.body;
-  const u = await User.findOne({ mobile: req.user.mobile });
+  const user = await User.findOne({ mobile: req.user.mobile });
 
-  if (amount < 100) return res.status(400).json({ error: "Min ₹100" });
-  if (!u.deposited) return res.status(400).json({ error: "Deposit required" });
-  if (amount > u.wallet) return res.status(400).json({ error: "No balance" });
+  if (amount < 100) return res.status(400).json({ error: "Minimum ₹100" });
+  if (!user.deposited) return res.status(400).json({ error: "Deposit required" });
+  if (amount > user.wallet) return res.status(400).json({ error: "No balance" });
 
-  const required = Math.max(u.bonus, u.depositAmount);
-  if (u.totalWagered < required) {
+  const required = Math.max(user.bonus, user.depositAmount);
+  if (user.totalWagered < required) {
     return res.status(400).json({
-      error: `Wager ₹${required - u.totalWagered} more`
+      error: `Wager ₹${required - user.totalWagered} more`
     });
   }
 
   await Withdraw.create({
-    mobile: u.mobile,
+    mobile: user.mobile,
     amount,
-    method: u.withdrawMethod,
-    details: u.withdrawDetails
+    method: user.withdrawMethod,
+    details: user.withdrawDetails
   });
 
-  u.wallet -= amount;
-  await u.save();
+  user.wallet -= amount;
+  await user.save();
 
   res.json({ message: "Withdraw request submitted" });
 });
 
 /* =========================
-   ADMIN WITHDRAW
+   ADMIN — WITHDRAW
 ========================= */
 app.get("/admin/withdraws", adminAuth, async (req, res) => {
   const list = await Withdraw.find().sort({ createdAt: -1 });
@@ -386,64 +318,11 @@ app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
   await w.save();
   res.json({ message: `Withdraw ${status.toLowerCase()}` });
 });
+
 /* =========================
-   ADMIN DASHBOARD STATS
-========================= */
-app.get("/admin/stats", adminAuth, async (req, res) => {
-  const totalUsers = await User.countDocuments();
-
-  const totalDepositsAgg = await User.aggregate([
-    { $group: { _id: null, total: { $sum: "$depositAmount" } } }
-  ]);
-
-  const totalDeposits = totalDepositsAgg[0]?.total || 0;
-
-  const totalWithdrawAgg = await Withdraw.aggregate([
-    { $match: { status: "APPROVED" } },
-    { $group: { _id: null, total: { $sum: "$amount" } } }
-  ]);
-
-  const totalWithdrawals = totalWithdrawAgg[0]?.total || 0;
-
-  const totalWalletAgg = await User.aggregate([
-    { $group: { _id: null, total: { $sum: "$wallet" } } }
-  ]);
-
-  const totalWallet = totalWalletAgg[0]?.total || 0;
-
-  const totalRounds = await Round.countDocuments();
-
-  const profit = totalDeposits - totalWithdrawals;
-
-  res.json({
-    totalUsers,
-    totalDeposits,
-    totalWithdrawals,
-    totalWallet,
-    totalRounds,
-    profit
-  });
-});
-app.post("/admin/deposit-info", adminAuth, async (req, res) => {
-  const { upiId, qrImage } = req.body;
-
-  let settings = await AdminSettings.findOne();
-
-  if (!settings) {
-    settings = new AdminSettings({ upiId, qrImage });
-  } else {
-    settings.upiId = upiId;
-    settings.qrImage = qrImage;
-    settings.updatedAt = new Date();
-  }
-
-  await settings.save();
-  res.json({ message: "Deposit info updated" });
-});
-/* =========================
-   START
+   START SERVER
 ========================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🚀 Server running on", PORT);
+  console.log("🚀 BIGWIN backend running on", PORT);
 });
