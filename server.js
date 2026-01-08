@@ -5,35 +5,47 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 
-/* ===== APP INIT (MUST BE FIRST) ===== */
 const app = express();
 
-/* ===== MODELS ===== */
+/* =========================
+   MODELS
+========================= */
 const User = require("./models/User");
 const Bet = require("./models/Bet");
 const Round = require("./models/Round");
 const Withdraw = require("./models/Withdraw");
 
-/* ===== MIDDLEWARE ===== */
+/* =========================
+   MIDDLEWARE
+========================= */
 const auth = require("./middleware/auth");
 
-/* ===== ADMIN CONFIG ===== */
-const ADMIN_KEY = process.env.ADMIN_KEY || "bigwin_admin_123";
-
 function adminAuth(req, res, next) {
-  if (req.headers["x-admin-key"] !== ADMIN_KEY) {
-    return res.status(403).json({ error: "Admin access denied" });
+  try {
+    const token = req.headers.authorization;
+    if (!token) return res.status(401).json({ error: "Admin token missing" });
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role !== "admin") {
+      return res.status(403).json({ error: "Admin access denied" });
+    }
+
+    req.admin = decoded;
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid admin token" });
   }
-  next();
 }
 
-/* ===== APP SETUP ===== */
+/* =========================
+   APP SETUP
+========================= */
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 /* =========================
-   🔁 ROUND STATE (GLOBAL)
+   ROUND STATE
 ========================= */
 let CURRENT_ROUND = {
   id: Date.now().toString(),
@@ -41,26 +53,14 @@ let CURRENT_ROUND = {
 };
 
 /* =========================
-        BASIC
+   BASIC
 ========================= */
 app.get("/", (req, res) => {
   res.send("BIGWIN backend running");
 });
 
 /* =========================
-   ROUND HISTORY (LAST 20)
-========================= */
-app.get("/rounds/history", async (req, res) => {
-  const rounds = await Round.find()
-    .sort({ createdAt: -1 })
-    .limit(20)
-    .select("roundId winner createdAt");
-
-  res.json(rounds);
-});
-
-/* =========================
-        AUTH
+   AUTH (USER)
 ========================= */
 app.post("/register", async (req, res) => {
   try {
@@ -96,7 +96,28 @@ app.post("/login", async (req, res) => {
 });
 
 /* =========================
-        WALLET / PROFILE
+   ADMIN LOGIN
+========================= */
+app.post("/admin/login", (req, res) => {
+  const { username, password } = req.body;
+
+  if (
+    username === process.env.ADMIN_USER &&
+    password === process.env.ADMIN_PASS
+  ) {
+    const token = jwt.sign(
+      { role: "admin" },
+      process.env.JWT_SECRET,
+      { expiresIn: "12h" }
+    );
+    return res.json({ token });
+  }
+
+  res.status(401).json({ error: "Invalid admin credentials" });
+});
+
+/* =========================
+   USER DATA
 ========================= */
 app.get("/wallet", auth, async (req, res) => {
   const u = await User.findOne({ mobile: req.user.mobile });
@@ -113,39 +134,23 @@ app.get("/profile", auth, async (req, res) => {
 });
 
 /* =========================
-        BET HISTORY (USER)
+   BETS
 ========================= */
 app.get("/bets", auth, async (req, res) => {
   const bets = await Bet.find({ mobile: req.user.mobile })
     .sort({ createdAt: -1 })
     .limit(20);
-
   res.json(bets);
 });
 
-/* =========================
-        ROUND
-========================= */
-app.get("/round/current", (req, res) => {
-  res.json(CURRENT_ROUND);
-});
-/* =========================
-   CURRENT ROUND USER BETS
-========================= */
 app.get("/bets/current", auth, async (req, res) => {
   const bets = await Bet.find({
     mobile: req.user.mobile,
     roundId: CURRENT_ROUND.id
-  }).sort({ createdAt: -1 });
-
-  res.json({
-    roundId: CURRENT_ROUND.id,
-    bets
   });
+  res.json({ roundId: CURRENT_ROUND.id, bets });
 });
-/* =========================
-        PLACE BET
-========================= */
+
 app.post("/bet", auth, async (req, res) => {
   const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
   if (elapsed >= 30) {
@@ -175,14 +180,28 @@ app.post("/bet", auth, async (req, res) => {
 });
 
 /* =========================
-        RESOLVE ROUND
+   ROUND INFO
 ========================= */
-app.post("/round/resolve", async (req, res) => {
+app.get("/round/current", (req, res) => {
+  res.json(CURRENT_ROUND);
+});
+
+app.get("/rounds/history", async (req, res) => {
+  const rounds = await Round.find()
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .select("roundId winner createdAt");
+  res.json(rounds);
+});
+
+/* =========================
+   RESOLVE ROUND
+========================= */
+async function resolveRound() {
   const roundId = CURRENT_ROUND.id;
   const bets = await Bet.find({ roundId });
 
-  let redPool = 0;
-  let greenPool = 0;
+  let redPool = 0, greenPool = 0;
 
   bets.forEach(b => {
     if (b.color === "red") redPool += b.amount;
@@ -207,85 +226,94 @@ app.post("/round/resolve", async (req, res) => {
     await bet.save();
   }
 
-  await Round.create({
-    roundId,
-    redPool,
-    greenPool,
-    winner
-  });
+  await Round.create({ roundId, redPool, greenPool, winner });
 
   CURRENT_ROUND = {
     id: Date.now().toString(),
     startTime: Date.now()
   };
+}
 
-  res.json({ roundId, winner, nextRoundId: CURRENT_ROUND.id });
-});
-/* =========================
-   AUTO ROUND TIMER (30s)
-========================= */
+/* AUTO ROUND EVERY 30s */
 setInterval(async () => {
   const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+  if (elapsed >= 30) {
+    console.log("⏱ Resolving round:", CURRENT_ROUND.id);
+    await resolveRound();
+  }
+}, 1000);
 
-  if (elapsed < 30) return;
+/* =========================
+   WITHDRAW (USER)
+========================= */
+app.post("/withdraw", auth, async (req, res) => {
+  const { amount } = req.body;
+  const u = await User.findOne({ mobile: req.user.mobile });
 
-  console.log("⏱ Auto resolving round:", CURRENT_ROUND.id);
+  if (amount < 100) return res.status(400).json({ error: "Min ₹100" });
+  if (!u.deposited) return res.status(400).json({ error: "Deposit required" });
+  if (amount > u.wallet) return res.status(400).json({ error: "No balance" });
 
-  const roundId = CURRENT_ROUND.id;
-  const bets = await Bet.find({ roundId });
-
-  let redPool = 0;
-  let greenPool = 0;
-
-  bets.forEach(b => {
-    if (b.color === "red") redPool += b.amount;
-    if (b.color === "green") greenPool += b.amount;
-  });
-
-  let winner =
-    redPool === greenPool
-      ? Math.random() < 0.5 ? "red" : "green"
-      : redPool < greenPool ? "red" : "green";
-
-  for (const bet of bets) {
-    if (bet.color === winner) {
-      bet.status = "WON";
-      await User.updateOne(
-        { mobile: bet.mobile },
-        { $inc: { wallet: bet.amount * 2 * 0.98 } }
-      );
-    } else {
-      bet.status = "LOST";
-    }
-    await bet.save();
+  const required = Math.max(u.bonus, u.depositAmount);
+  if (u.totalWagered < required) {
+    return res.status(400).json({
+      error: `Wager ₹${required - u.totalWagered} more`
+    });
   }
 
-  await Round.create({
-    roundId,
-    redPool,
-    greenPool,
-    winner
+  await Withdraw.create({
+    mobile: u.mobile,
+    amount,
+    method: u.withdrawMethod,
+    details: u.withdrawDetails
   });
 
-  CURRENT_ROUND = {
-    id: Date.now().toString(),
-    startTime: Date.now()
-  };
+  u.wallet -= amount;
+  await u.save();
 
-  console.log("✅ New round started:", CURRENT_ROUND.id);
-}, 1000);
-/* =========================
-        ADMIN
-========================= */
-app.get("/admin/withdraws", adminAuth, async (req, res) => {
-  const withdraws = await Withdraw.find().sort({ createdAt: -1 });
-  res.json(withdraws);
+  res.json({ message: "Withdraw request submitted" });
 });
 
 /* =========================
-        START
+   ADMIN WITHDRAW
+========================= */
+app.get("/admin/withdraws", adminAuth, async (req, res) => {
+  const list = await Withdraw.find().sort({ createdAt: -1 });
+  res.json(list);
+});
+
+app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
+  const { status, adminNote } = req.body;
+
+  if (!["APPROVED", "REJECTED"].includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+
+  const w = await Withdraw.findById(req.params.id);
+  if (!w) return res.status(404).json({ error: "Not found" });
+  if (w.status !== "PENDING") {
+    return res.status(400).json({ error: "Already processed" });
+  }
+
+  w.status = status;
+  w.adminNote = adminNote || "";
+  w.processedAt = new Date();
+
+  if (status === "REJECTED") {
+    await User.updateOne(
+      { mobile: w.mobile },
+      { $inc: { wallet: w.amount } }
+    );
+  }
+
+  await w.save();
+  res.json({ message: `Withdraw ${status.toLowerCase()}` });
+});
+
+/* =========================
+   START
 ========================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log("🚀 Server running on", PORT);
 });
