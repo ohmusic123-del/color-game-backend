@@ -1,22 +1,11 @@
 require("dotenv").config();
-const express = require("express");
-const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const cors = require("cors");
+require("./db");
 
-const User = require("./models/User");
+const express = require("express");
+const cors = require("cors");
+const jwt = require("jsonwebtoken");
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-
-/* ================= DB ================= */
-
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch(err => console.error("❌ Mongo error:", err));
 
 /* =========================
    MODELS
@@ -81,32 +70,36 @@ app.get("/", (req, res) => {
 
 app.post("/register", async (req, res) => {
   try {
-    const { mobile, password } = req.body;
+    let { mobile, password } = req.body;
 
     if (!mobile || !password) {
-      return res.status(400).json({ error: "Mobile & password required" });
+      return res.status(400).json({ error: "Mobile and password required" });
     }
 
-    const mobileStr = String(mobile);
+    mobile = String(mobile).trim(); // ✅ force string
 
-    const existing = await User.findOne({ mobile: mobileStr });
-    if (existing) {
+    const existingUser = await User.findOne({ mobile });
+    if (existingUser) {
       return res.status(400).json({ error: "User already exists" });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    await User.create({
-      mobile: mobileStr,
-      password: hashedPassword,
-      wallet: 0
+    const user = new User({
+      mobile,
+      password, // ⚠️ plain password (same as login)
+      wallet: 100,
+      bonus: 100,
+      deposited: false,
+      depositAmount: 0,
+      totalWagered: 0
     });
 
-    return res.json({ message: "Registered successfully" });
+    await user.save();
+
+    res.json({ message: "Registered successfully" });
 
   } catch (err) {
     console.error("REGISTER ERROR:", err);
-    return res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -114,20 +107,22 @@ app.post("/register", async (req, res) => {
 
 app.post("/login", async (req, res) => {
   try {
-    const { mobile, password } = req.body;
+    let { mobile, password } = req.body;
 
-    const user = await User.findOne({ mobile: String(mobile) });
-    if (!user) {
-      return res.status(401).json({ error: "Invalid credentials" });
+    if (!mobile || !password) {
+      return res.status(400).json({ error: "Mobile and password required" });
     }
 
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) {
+    mobile = String(mobile).trim(); // ✅ same format as register
+
+    const user = await User.findOne({ mobile });
+
+    if (!user || user.password !== password) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
     const token = jwt.sign(
-      { id: user._id },
+      { mobile: user.mobile },
       process.env.JWT_SECRET
     );
 
