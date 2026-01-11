@@ -67,18 +67,19 @@ app.get("/", (req, res) => {
 ========================= */
 app.post("/register", async (req, res) => {
   try {
-    const { mobile, password } = req.body;
+    const mobile = req.body.mobile;
+    const password = req.body.password;
 
     if (!mobile || !password) {
       return res.status(400).json({ error: "Mobile and password required" });
     }
 
-    const existingUser = await User.findOne({ mobile });
-    if (existingUser) {
+    const exists = await User.findOne({ mobile });
+    if (exists) {
       return res.status(400).json({ error: "User already exists" });
     }
 
-    const user = await User.create({
+    await User.create({
       mobile,
       password,
       wallet: 100,
@@ -88,9 +89,10 @@ app.post("/register", async (req, res) => {
       totalWagered: 0
     });
 
-    res.json({ message: "Registered successfully", mobile: user.mobile });
+    res.json({ message: "Registered successfully" });
+
   } catch (err) {
-    console.error("Register error:", err);
+    console.error("REGISTER ERROR:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
