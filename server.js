@@ -375,3 +375,58 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("🚀 BIGWIN backend running on", PORT);
 });
+// ================= ADMIN STATS =================
+app.get("/admin/stats", adminAuth, async (req, res) => {
+  try {
+    const usersCount = await User.countDocuments();
+
+    const walletAgg = await User.aggregate([
+      { $group: { _id: null, total: { $sum: "$wallet" } } }
+    ]);
+    const totalWallet = walletAgg[0]?.total || 0;
+
+    const depositAgg = await Deposit.aggregate([
+      { $match: { status: "APPROVED" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+    const totalDeposits = depositAgg[0]?.total || 0;
+
+    const withdrawAgg = await Withdraw.aggregate([
+      { $match: { status: "APPROVED" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+    const totalWithdrawals = withdrawAgg[0]?.total || 0;
+
+    const betAgg = await Bet.aggregate([
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+    const totalBets = betAgg[0]?.total || 0;
+
+    const payoutAgg = await Bet.aggregate([
+      { $match: { status: "WON" } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $multiply: ["$amount", 2] } }
+        }
+      }
+    ]);
+    const totalPayout = payoutAgg[0]?.total || 0;
+
+    const profit = totalBets - totalPayout;
+
+    const roundsCount = await Round.countDocuments();
+
+    res.json({
+      users: usersCount,
+      deposits: totalDeposits,
+      withdrawals: totalWithdrawals,
+      wallet: totalWallet,
+      profit,
+      rounds: roundsCount
+    });
+  } catch (err) {
+    console.error("Admin stats error:", err);
+    res.status(500).json({ error: "Admin stats failed" });
+  }
+});
