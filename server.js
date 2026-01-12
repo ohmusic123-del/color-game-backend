@@ -203,6 +203,18 @@ app.post("/bet", auth, async (req, res) => {
   const { color, amount } = req.body;
   const user = await User.findOne({ mobile: req.user.mobile });
 
+  // ❌ Prevent multiple bets in same round
+  const existingBet = await Bet.findOne({
+    mobile: user.mobile,
+    roundId: CURRENT_ROUND.id
+  });
+
+  if (existingBet) {
+    return res.status(400).json({
+      error: "You already placed a bet in this round"
+    });
+  }
+
   if (amount > user.wallet) {
     return res.status(400).json({ error: "Insufficient balance" });
   }
