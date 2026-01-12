@@ -220,7 +220,7 @@ app.post("/bet", auth, async (req, res) => {
   }
 
   user.wallet -= amount;
-  user.totalWagered += amount;
+  user.totalWagered = (user.totalWagered || 0) + amount;
   await user.save();
 
   await Bet.create({
