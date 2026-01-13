@@ -371,22 +371,6 @@ app.post("/bet", auth, async (req, res) => {
 /* =========================
    ROUND INFO
 ========================= */
-app.get("/round/current", (req, res) => {
-  res.json(CURRENT_ROUND);
-});
-
-app.get("/rounds/history", async (req, res) => {
-  const rounds = await Round.find()
-    .sort({ createdAt: -1 })
-    .limit(20)
-    .select("roundId winner createdAt");
-
-  res.json(rounds);
-});
-
-/* =========================
-   ROUND RESOLUTION
-========================= */
 async function resolveRound() {
   const roundId = CURRENT_ROUND.id;
   const bets = await Bet.find({ roundId });
@@ -407,9 +391,13 @@ async function resolveRound() {
   for (const bet of bets) {
     if (bet.color === winner) {
       bet.status = "WON";
+      
+      // ✅ CORRECT: bet × 2 × 0.98 = payout
+      const payout = bet.amount * 2 * 0.98;
+      
       await User.updateOne(
         { mobile: bet.mobile },
-        { $inc: { wallet: bet.amount * 2 * 0.98 } }
+        { $inc: { wallet: payout } }
       );
     } else {
       bet.status = "LOST";
@@ -439,31 +427,52 @@ setInterval(async () => {
    WITHDRAW — USER
 ========================= */
 app.post("/withdraw", auth, async (req, res) => {
-  const { amount } = req.body;
-  const user = await User.findOne({ mobile: req.user.mobile });
+  try {
+    const { amount } = req.body;
+    const user = await User.findOne({ mobile: req.user.mobile });
 
-  if (amount < 100) return res.status(400).json({ error: "Minimum ₹100" });
-  if (!user.deposited) return res.status(400).json({ error: "Deposit required" });
-  if (amount > user.wallet) return res.status(400).json({ error: "No balance" });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
-  const required = Math.max(user.bonus, user.depositAmount);
-  if (user.totalWagered < required) {
-    return res.status(400).json({
-      error: `Wager ₹${required - user.totalWagered} more`
+    if (amount < 100) {
+      return res.status(400).json({ error: "Minimum ₹100" });
+    }
+
+    if (!user.deposited) {
+      return res.status(400).json({ error: "Deposit required first" });
+    }
+
+    if (amount > user.wallet) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+
+    // ✅ Must wager (deposit + bonus) before withdrawal
+    const requiredWager = user.depositAmount + user.bonus;
+    const remainingWager = requiredWager - (user.totalWagered || 0);
+
+    if (remainingWager > 0) {
+      return res.status(400).json({
+        error: `Wager ₹${remainingWager} more to withdraw`
+      });
+    }
+
+    await Withdraw.create({
+      mobile: user.mobile,
+      amount,
+      method: user.withdrawMethod || "upi",
+      details: user.withdrawDetails || {}
     });
+
+    user.wallet -= amount;
+    await user.save();
+
+    res.json({ message: "Withdraw request submitted" });
+
+  } catch (err) {
+    console.error("Withdraw error:", err);
+    res.status(500).json({ error: "Withdraw failed" });
   }
-
-  await Withdraw.create({
-    mobile: user.mobile,
-    amount,
-    method: user.withdrawMethod,
-    details: user.withdrawDetails
-  });
-
-  user.wallet -= amount;
-  await user.save();
-
-  res.json({ message: "Withdraw request submitted" });
 });
 
 /* =========================
