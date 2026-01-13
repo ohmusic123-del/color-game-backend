@@ -14,7 +14,7 @@ const User = require("./models/User");
 const Bet = require("./models/Bet");
 const Round = require("./models/Round");
 const Withdraw = require("./models/Withdraw");
-
+const Deposit = require("./models/Deposit");  // ✅ ADD THIS LINE
 /* =========================
    MIDDLEWARE
 ========================= */
@@ -102,7 +102,114 @@ app.post("/register", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+/* =========================
+   DEPOSIT – USER
+========================= */
 
+// User submits deposit request
+app.post("/deposit", auth, async (req, res) => {
+  try {
+    const { amount } = req.body;
+
+    if (!amount || amount < 100) {
+      return res.status(400).json({ error: "Minimum deposit ₹100" });
+    }
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // ✅ AUTO-APPROVE for testing (change to PENDING for production)
+    const deposit = await Deposit.create({
+      mobile: user.mobile,
+      amount,
+      method: "upi",
+      status: "SUCCESS" // Change to "PENDING" when you want manual approval
+    });
+
+    // ✅ Add money to wallet immediately
+    user.wallet += amount;
+    user.deposited = true;
+    user.depositAmount += amount;
+    
+    // First deposit bonus (100%)
+    if (user.depositAmount === amount) {
+      user.bonus = amount;
+      user.wallet += user.bonus;
+    }
+    
+    await user.save();
+
+    res.json({ 
+      message: "Deposit successful",
+      newWallet: user.wallet
+    });
+
+  } catch (err) {
+    console.error("Deposit error:", err);
+    res.status(500).json({ error: "Deposit failed" });
+  }
+});
+
+// Get deposit history
+app.get("/wallet/deposit-history", auth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(20);
+    
+    res.json(deposits);
+  } catch (err) {
+    console.error("Deposit history error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+   WALLET HISTORY
+========================= */
+
+// Combined wallet history (deposits + withdrawals + bets)
+app.get("/wallet/history", auth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    const withdrawals = await Withdraw.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    const history = [
+      ...deposits.map(d => ({ ...d, type: 'deposit' })),
+      ...withdrawals.map(w => ({ ...w, type: 'withdraw' }))
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+     .slice(0, 20);
+
+    res.json(history);
+  } catch (err) {
+    console.error("Wallet history error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Withdraw history only
+app.get("/wallet/withdraw-history", auth, async (req, res) => {
+  try {
+    const withdrawals = await Withdraw.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(20);
+    
+    res.json(withdrawals);
+  } catch (err) {
+    console.error("Withdraw history error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 /* ================= LOGIN ================= */
 
 app.post("/login", async (req, res) => {
@@ -195,43 +302,70 @@ app.get("/bets/current", auth, async (req, res) => {
 });
 
 app.post("/bet", auth, async (req, res) => {
-  const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
-  if (elapsed >= 30) {
-    return res.status(400).json({ error: "Round closed" });
-  }
+  try {
+    const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+    
+    if (elapsed >= 30) {
+      return res.status(400).json({ error: "Round closed" });
+    }
 
-  const { color, amount } = req.body;
-  const user = await User.findOne({ mobile: req.user.mobile });
+    const { color, amount } = req.body;
 
-  // ❌ Prevent multiple bets in same round
-  const existingBet = await Bet.findOne({
-    mobile: user.mobile,
-    roundId: CURRENT_ROUND.id
-  });
+    // Validate inputs
+    if (!color || !["red", "green"].includes(color)) {
+      return res.status(400).json({ error: "Invalid color" });
+    }
 
-  if (existingBet) {
-    return res.status(400).json({
-      error: "You already placed a bet in this round"
+    if (!amount || amount < 1) {
+      return res.status(400).json({ error: "Minimum bet ₹1" });
+    }
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (amount > user.wallet) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+
+    // ✅ ATOMIC CHECK: Prevent duplicate bets
+    const existingBet = await Bet.findOne({
+      mobile: user.mobile,
+      roundId: CURRENT_ROUND.id
     });
+
+    if (existingBet) {
+      return res.status(400).json({
+        error: `Already bet ₹${existingBet.amount} on ${existingBet.color}`
+      });
+    }
+
+    // ✅ Deduct wallet first
+    user.wallet -= amount;
+    user.totalWagered = (user.totalWagered || 0) + amount;
+    await user.save();
+
+    // ✅ Then create bet
+    const bet = await Bet.create({
+      mobile: user.mobile,
+      color,
+      amount,
+      roundId: CURRENT_ROUND.id,
+      status: "PENDING"
+    });
+
+    res.json({ 
+      message: "Bet placed successfully",
+      roundId: CURRENT_ROUND.id,
+      newWallet: user.wallet
+    });
+
+  } catch (err) {
+    console.error("BET ERROR:", err);
+    res.status(500).json({ error: "Bet failed. Please try again." });
   }
-
-  if (amount > user.wallet) {
-    return res.status(400).json({ error: "Insufficient balance" });
-  }
-
-  user.wallet -= amount;
-  user.totalWagered = (user.totalWagered || 0) + amount;
-  await user.save();
-
-  await Bet.create({
-    mobile: user.mobile,
-    color,
-    amount,
-    roundId: CURRENT_ROUND.id,
-    status: "PENDING"
-  });
-
-  res.json({ message: "Bet placed", roundId: CURRENT_ROUND.id });
 });
 
 /* =========================
