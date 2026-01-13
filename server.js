@@ -367,9 +367,29 @@ app.post("/bet", auth, async (req, res) => {
     res.status(500).json({ error: "Bet failed. Please try again." });
   }
 });
-
 /* =========================
    ROUND INFO
+========================= */
+app.get("/round/current", (req, res) => {
+  res.json(CURRENT_ROUND);
+});
+
+app.get("/rounds/history", async (req, res) => {
+  try {
+    const rounds = await Round.find()
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .select("roundId winner createdAt");
+
+    res.json(rounds);
+  } catch (err) {
+    console.error("Rounds history error:", err);
+    res.status(500).json({ error: "Failed to load rounds" });
+  }
+});
+
+/* =========================
+   ROUND RESOLUTION
 ========================= */
 async function resolveRound() {
   const roundId = CURRENT_ROUND.id;
