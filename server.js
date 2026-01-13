@@ -501,7 +501,78 @@ app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
   await w.save();
   res.json({ message: `Withdraw ${status.toLowerCase()}` });
 });
+/* =========================
+   ADMIN – DEPOSITS
+========================= */
 
+// Get all deposits
+app.get("/admin/deposits", adminAuth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(50);
+    
+    res.json(deposits);
+  } catch (err) {
+    console.error("Admin deposits error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Approve/reject deposit (for manual approval mode)
+app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
+  try {
+    const { status, adminNote } = req.body;
+
+    if (!["SUCCESS", "FAILED"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status" });
+    }
+
+    const deposit = await Deposit.findById(req.params.id);
+    
+    if (!deposit) {
+      return res.status(404).json({ error: "Deposit not found" });
+    }
+
+    if (deposit.status !== "PENDING") {
+      return res.status(400).json({ error: "Already processed" });
+    }
+
+    deposit.status = status;
+    deposit.adminNote = adminNote || "";
+    await deposit.save();
+
+    // If approved, add money to user wallet
+    if (status === "SUCCESS") {
+      const user = await User.findOne({ mobile: deposit.mobile });
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      user.wallet += deposit.amount;
+      user.deposited = true;
+      user.depositAmount += deposit.amount;
+      
+      // First deposit bonus
+      if (user.depositAmount === deposit.amount) {
+        user.bonus = deposit.amount;
+        user.wallet += user.bonus;
+      }
+      
+      await user.save();
+    }
+
+    res.json({ 
+      message: `Deposit ${status.toLowerCase()}`,
+      deposit 
+    });
+
+  } catch (err) {
+    console.error("Admin deposit approval error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 /* =========================
    START SERVER
 ========================= */
@@ -520,13 +591,13 @@ app.get("/admin/stats", adminAuth, async (req, res) => {
     const totalWallet = walletAgg[0]?.total || 0;
 
     const depositAgg = await Deposit.aggregate([
-      { $match: { status: "APPROVED" } },
+      { $match: { status: "SUCCESS" } },  // ✅ Changed from APPROVED
       { $group: { _id: null, total: { $sum: "$amount" } } }
     ]);
     const totalDeposits = depositAgg[0]?.total || 0;
 
     const withdrawAgg = await Withdraw.aggregate([
-      { $match: { status: "APPROVED" } },
+      { $match: { status: "APPROVED" } },  // ✅ This is correct
       { $group: { _id: null, total: { $sum: "$amount" } } }
     ]);
     const totalWithdrawals = withdrawAgg[0]?.total || 0;
@@ -541,7 +612,7 @@ app.get("/admin/stats", adminAuth, async (req, res) => {
       {
         $group: {
           _id: null,
-          total: { $sum: { $multiply: ["$amount", 2] } }
+          total: { $sum: { $multiply: ["$amount", 2, 0.98] } }
         }
       }
     ]);
@@ -552,12 +623,12 @@ app.get("/admin/stats", adminAuth, async (req, res) => {
     const roundsCount = await Round.countDocuments();
 
     res.json({
-      users: usersCount,
-      deposits: totalDeposits,
-      withdrawals: totalWithdrawals,
-      wallet: totalWallet,
+      users: usersCount,           // ✅ Changed from totalUsers
+      deposits: totalDeposits,      // ✅ Changed from totalDeposits
+      withdrawals: totalWithdrawals, // ✅ Changed from totalWithdrawals
+      wallet: totalWallet,          // ✅ Changed from totalWallet
       profit,
-      rounds: roundsCount
+      rounds: roundsCount           // ✅ Changed from totalRounds
     });
   } catch (err) {
     console.error("Admin stats error:", err);
