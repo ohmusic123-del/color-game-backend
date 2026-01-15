@@ -305,7 +305,7 @@ app.post("/bet", auth, async (req, res) => {
   try {
     const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
     
-    if (elapsed >= 30) {
+    if (elapsed >= 60) {  // ✅ Changed from 30 to 60 
       return res.status(400).json({ error: "Round closed" });
     }
 
@@ -434,11 +434,11 @@ async function resolveRound() {
 }
 
 /* =========================
-   AUTO ROUND TIMER (30s)
+   AUTO ROUND TIMER (60s)
 ========================= */
 setInterval(async () => {
   const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
-  if (elapsed >= 30) {
+  if (elapsed >= 60) {  // ✅ Changed from 30 to 60
     await resolveRound();
   }
 }, 1000);
