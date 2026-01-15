@@ -603,6 +603,140 @@ app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
   }
 });
 /* =========================
+   ADMIN - USERS
+========================= */
+app.get("/admin/users", adminAuth, async (req, res) => {
+  try {
+    const users = await User.find()
+      .sort({ createdAt: -1 })
+      .select("-password")
+      .limit(100);
+    
+    res.json(users);
+  } catch (err) {
+    console.error("Admin users error:", err);
+    res.status(500).json({ error: "Failed to load users" });
+  }
+});
+
+app.post("/admin/user/balance", adminAuth, async (req, res) => {
+  try {
+    const { mobile, amount } = req.body;
+
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    user.wallet += amount;
+    await user.save();
+
+    res.json({ 
+      message: `Balance ${amount > 0 ? 'added' : 'deducted'} successfully`,
+      newBalance: user.wallet
+    });
+  } catch (err) {
+    console.error("Balance update error:", err);
+    res.status(500).json({ error: "Failed to update balance" });
+  }
+});
+
+/* =========================
+   ADMIN - TRANSACTIONS
+========================= */
+app.get("/admin/transactions", adminAuth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    const withdrawals = await Withdraw.find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    const bets = await Bet.find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    const transactions = [
+      ...deposits.map(d => ({ ...d, type: 'deposits' })),
+      ...withdrawals.map(w => ({ ...w, type: 'withdrawals' })),
+      ...bets.map(b => ({ ...b, type: 'bets' }))
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json(transactions);
+  } catch (err) {
+    console.error("Transactions error:", err);
+    res.status(500).json({ error: "Failed to load transactions" });
+  }
+});
+
+/* =========================
+   ADMIN - RECENT ACTIVITY
+========================= */
+app.get("/admin/recent-activity", adminAuth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    const withdrawals = await Withdraw.find()
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    const activity = [
+      ...deposits.map(d => ({ ...d, type: 'DEPOSIT' })),
+      ...withdrawals.map(w => ({ ...w, type: 'WITHDRAWAL' }))
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+     .slice(0, 10);
+
+    res.json(activity);
+  } catch (err) {
+    console.error("Recent activity error:", err);
+    res.status(500).json({ error: "Failed to load activity" });
+  }
+});
+
+/* =========================
+   ADMIN - SETTINGS
+========================= */
+app.get("/admin/settings", adminAuth, async (req, res) => {
+  try {
+    // For now, return default settings
+    // TODO: Store in database
+    res.json({
+      minBet: 1,
+      maxBet: 10000,
+      houseEdge: 0.02,
+      minDeposit: 100,
+      minWithdraw: 100,
+      upiId: process.env.UPI_ID || "",
+      bonusPercent: 100
+    });
+  } catch (err) {
+    console.error("Settings error:", err);
+    res.status(500).json({ error: "Failed to load settings" });
+  }
+});
+
+app.post("/admin/settings", adminAuth, async (req, res) => {
+  try {
+    const { key, value } = req.body;
+    
+    // TODO: Store in database
+    
+    res.json({ message: "Setting updated successfully" });
+  } catch (err) {
+    console.error("Update settings error:", err);
+    res.status(500).json({ error: "Failed to update settings" });
+  }
+});
+/* =========================
    START SERVER
 ========================= */
 const PORT = process.env.PORT || 3000;
