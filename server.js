@@ -632,7 +632,33 @@ app.post("/withdraw", auth, async (req, res) => {
     res.status(500).json({ error: "Withdraw failed" });
   }
 });
+/* =========================
+   SAVE WITHDRAWAL METHOD
+========================= */
+app.post("/user/withdrawal-method", auth, async (req, res) => {
+  try {
+    const { method, details } = req.body;
 
+    if (!method || !details) {
+      return res.status(400).json({ error: "Method and details required" });
+    }
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    user.withdrawMethod = method;
+    user.withdrawDetails = details;
+    await user.save();
+
+    res.json({ message: "Withdrawal method saved successfully" });
+  } catch (err) {
+    console.error("Save withdrawal method error:", err);
+    res.status(500).json({ error: "Failed to save method" });
+  }
+});
 /* =========================
    ADMIN — WITHDRAW
 ========================= */
