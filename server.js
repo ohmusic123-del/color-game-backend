@@ -1,6 +1,7 @@
 require("dotenv").config();
 require("./db");
 
+const Referral = require("./models/Referral");
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -39,7 +40,66 @@ function adminAuth(req, res, next) {
     return res.status(401).json({ error: "Invalid admin token" });
   }
 }
+/* =========================
+   REFERRAL COMMISSION RATES
+========================= */
+const COMMISSION_RATES = {
+  1: 0.10,  // 10% for level 1
+  2: 0.05,  // 5% for level 2
+  3: 0.03,  // 3% for level 3
+  4: 0.02,  // 2% for level 4
+  5: 0.01,  // 1% for level 5
+  6: 0.01   // 1% for level 6
+};
 
+/* =========================
+   GENERATE REFERRAL CODE
+========================= */
+function generateReferralCode(mobile) {
+  return `BW${mobile.substring(mobile.length - 6)}${Date.now().toString().substring(8)}`;
+}
+
+/* =========================
+   PROCESS REFERRAL COMMISSION
+========================= */
+async function processReferralCommission(userId, amount, type) {
+  try {
+    const user = await User.findOne({ mobile: userId });
+    if (!user || !user.referredBy) return;
+
+    let currentReferrer = user.referredBy;
+    let level = 1;
+
+    while (currentReferrer && level <= 6) {
+      const referrer = await User.findOne({ referralCode: currentReferrer });
+      
+      if (!referrer) break;
+
+      const commission = amount * COMMISSION_RATES[level];
+      
+      // Add commission to referrer's wallet
+      referrer.wallet += commission;
+      referrer.referralEarnings += commission;
+      await referrer.save();
+
+      // Record commission
+      await Referral.create({
+        userId: referrer.mobile,
+        referredUserId: userId,
+        level,
+        commission,
+        type,
+        amount
+      });
+
+      // Move to next level
+      currentReferrer = referrer.referredBy;
+      level++;
+    }
+  } catch (err) {
+    console.error("Referral commission error:", err);
+  }
+}
 /* =========================
    APP SETUP
 ========================= */
@@ -70,32 +130,49 @@ app.get("/", (req, res) => {
 
 app.post("/register", async (req, res) => {
   try {
-    let { mobile, password } = req.body;
+    let { mobile, password, referralCode } = req.body;
 
     if (!mobile || !password) {
       return res.status(400).json({ error: "Mobile and password required" });
     }
 
-    mobile = String(mobile).trim(); // ✅ force string
+    mobile = String(mobile).trim();
 
     const existingUser = await User.findOne({ mobile });
     if (existingUser) {
       return res.status(400).json({ error: "User already exists" });
     }
 
+    // Validate referral code if provided
+    let referredBy = null;
+    if (referralCode) {
+      const referrer = await User.findOne({ referralCode: referralCode.trim() });
+      if (referrer) {
+        referredBy = referralCode.trim();
+        // Increment referrer's count
+        referrer.totalReferrals += 1;
+        await referrer.save();
+      }
+    }
+
     const user = new User({
       mobile,
-      password, // ⚠️ plain password (same as login)
+      password,
       wallet: 100,
       bonus: 100,
       deposited: false,
       depositAmount: 0,
-      totalWagered: 0
+      totalWagered: 0,
+      referralCode: generateReferralCode(mobile),
+      referredBy
     });
 
     await user.save();
 
-    res.json({ message: "Registered successfully" });
+    res.json({ 
+      message: "Registered successfully",
+      referralCode: user.referralCode
+    });
 
   } catch (err) {
     console.error("REGISTER ERROR:", err);
@@ -142,10 +219,13 @@ app.post("/deposit", auth, async (req, res) => {
     
     await user.save();
 
-    res.json({ 
-      message: "Deposit successful",
-      newWallet: user.wallet
-    });
+// ✅ Process referral commission
+await processReferralCommission(user.mobile, amount, "DEPOSIT");
+
+res.json({ 
+  message: "Deposit successful",
+  newWallet: user.wallet
+});
 
   } catch (err) {
     console.error("Deposit error:", err);
@@ -166,7 +246,65 @@ app.get("/wallet/deposit-history", auth, async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+/* =========================
+   REFERRAL SYSTEM
+========================= */
 
+// Get user's referral info
+app.get("/referral/info", auth, async (req, res) => {
+  try {
+    const user = await User.findOne({ mobile: req.user.mobile });
+    
+    // Get direct referrals
+    const directReferrals = await User.find({ referredBy: user.referralCode })
+      .select("mobile createdAt deposited depositAmount");
+
+    // Get all downline referrals (up to 6 levels)
+    const allReferrals = await getReferralTree(user.referralCode, 1);
+
+    // Get commission history
+    const commissions = await Referral.find({ userId: user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.json({
+      referralCode: user.referralCode,
+      totalReferrals: user.totalReferrals,
+      referralEarnings: user.referralEarnings,
+      directReferrals,
+      allReferrals,
+      commissions
+    });
+  } catch (err) {
+    console.error("Referral info error:", err);
+    res.status(500).json({ error: "Failed to load referral info" });
+  }
+});
+
+// Get referral tree
+async function getReferralTree(referralCode, currentLevel) {
+  if (currentLevel > 6) return [];
+
+  const users = await User.find({ referredBy: referralCode })
+    .select("mobile referralCode createdAt deposited depositAmount");
+
+  const tree = [];
+
+  for (const user of users) {
+    const children = await getReferralTree(user.referralCode, currentLevel + 1);
+    
+    tree.push({
+      mobile: user.mobile,
+      level: currentLevel,
+      deposited: user.deposited,
+      depositAmount: user.depositAmount,
+      joinedAt: user.createdAt,
+      children
+    });
+  }
+
+  return tree;
+}
 /* =========================
    WALLET HISTORY
 ========================= */
