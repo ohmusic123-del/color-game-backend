@@ -43,6 +43,24 @@ const UserSchema = new mongoose.Schema(
       accountNumber: String,
       ifsc: String,
       usdtAddress: String
+    },
+    // ✅ REFERRAL FIELDS
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true
+    },
+    referredBy: {
+      type: String,
+      default: null
+    },
+    referralEarnings: {
+      type: Number,
+      default: 0
+    },
+    totalReferrals: {
+      type: Number,
+      default: 0
     }
   },
   { timestamps: true }
