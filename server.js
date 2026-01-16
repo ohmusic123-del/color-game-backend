@@ -100,6 +100,82 @@ async function processReferralCommission(userId, amount, type) {
     console.error("Referral commission error:", err);
   }
 }
+
+// Fixed Referral Info Endpoint
+app.get('/referral/info', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findOne({ mobile: req.user.mobile });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Get direct referrals (Level 1)
+    const directReferrals = await User.find({ referredBy: user.referralCode });
+
+    // Get all 6 levels of referrals
+    const getAllReferrals = async (referralCode, level = 1, allRefs = []) => {
+      if (level > 6) return allRefs;
+
+      const refs = await User.find({ referredBy: referralCode }).select('mobile referralCode depositAmount totalWagered createdAt');
+      
+      for (const ref of refs) {
+        allRefs.push({
+          mobile: ref.mobile,
+          level,
+          depositAmount: ref.depositAmount || 0,
+          totalWagered: ref.totalWagered || 0,
+          joinedAt: ref.createdAt
+        });
+        
+        // Recursively get their referrals
+        await getAllReferrals(ref.referralCode, level + 1, allRefs);
+      }
+
+      return allRefs;
+    };
+
+    const allReferrals = await getAllReferrals(user.referralCode);
+
+    // Get commission history
+    const commissions = await Referral.find({ userId: user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    // Calculate level-wise breakdown
+    const levelBreakdown = {
+      level1: { count: 0, earnings: 0 },
+      level2: { count: 0, earnings: 0 },
+      level3: { count: 0, earnings: 0 },
+      level4: { count: 0, earnings: 0 },
+      level5: { count: 0, earnings: 0 },
+      level6: { count: 0, earnings: 0 }
+    };
+
+    allReferrals.forEach(ref => {
+      levelBreakdown[`level${ref.level}`].count += 1;
+    });
+
+    commissions.forEach(comm => {
+      levelBreakdown[`level${comm.level}`].earnings += comm.commission;
+    });
+
+    res.json({
+      referralCode: user.referralCode,
+      totalReferrals: user.totalReferrals || directReferrals.length,
+      totalEarnings: user.referralEarnings || 0,
+      directReferrals: directReferrals.length,
+      allTeamMembers: allReferrals.length,
+      teamMembers: allReferrals,
+      commissions: commissions,
+      levelBreakdown: levelBreakdown
+    });
+
+  } catch (err) {
+    console.error('Referral info error:', err);
+    res.status(500).json({ message: 'Error fetching referral data' });
+  }
+});
 /* =========================
    APP SETUP
 ========================= */
