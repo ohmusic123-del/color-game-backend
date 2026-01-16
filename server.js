@@ -1,10 +1,10 @@
 require("dotenv").config();
 require("./db");
 
-const Referral = require("./models/Referral");
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 
 const app = express();
 
@@ -15,7 +15,9 @@ const User = require("./models/User");
 const Bet = require("./models/Bet");
 const Round = require("./models/Round");
 const Withdraw = require("./models/Withdraw");
-const Deposit = require("./models/Deposit");  // ✅ ADD THIS LINE
+const Deposit = require("./models/Deposit");
+const Referral = require("./models/Referral");
+
 /* =========================
    MIDDLEWARE
 ========================= */
@@ -24,7 +26,7 @@ const auth = require("./middleware/auth");
 /* ---------- Admin Auth ---------- */
 function adminAuth(req, res, next) {
   try {
-    const token = req.headers.authorization;
+    const token = req.headers.authorization?.replace("Bearer ", "");
     if (!token) {
       return res.status(401).json({ error: "Admin token missing" });
     }
@@ -40,6 +42,7 @@ function adminAuth(req, res, next) {
     return res.status(401).json({ error: "Invalid admin token" });
   }
 }
+
 /* =========================
    REFERRAL COMMISSION RATES
 ========================= */
@@ -51,13 +54,6 @@ const COMMISSION_RATES = {
   5: 0.01,  // 1% for level 5
   6: 0.01   // 1% for level 6
 };
-
-/* =========================
-   GENERATE REFERRAL CODE
-========================= */
-function generateReferralCode(mobile) {
-  return `BW${mobile.substring(mobile.length - 6)}${Date.now().toString().substring(8)}`;
-}
 
 /* =========================
    PROCESS REFERRAL COMMISSION
@@ -75,11 +71,11 @@ async function processReferralCommission(userId, amount, type) {
       
       if (!referrer) break;
 
-      const commission = amount * COMMISSION_RATES[level];
+      const commission = Math.round(amount * COMMISSION_RATES[level] * 100) / 100;
       
       // Add commission to referrer's wallet
-      referrer.wallet += commission;
-      referrer.referralEarnings += commission;
+      referrer.wallet = Math.round((referrer.wallet + commission) * 100) / 100;
+      referrer.referralEarnings = Math.round((referrer.referralEarnings + commission) * 100) / 100;
       await referrer.save();
 
       // Record commission
@@ -92,6 +88,8 @@ async function processReferralCommission(userId, amount, type) {
         amount
       });
 
+      console.log(`✅ Level ${level} commission: ₹${commission} to ${referrer.mobile}`);
+
       // Move to next level
       currentReferrer = referrer.referredBy;
       level++;
@@ -101,87 +99,18 @@ async function processReferralCommission(userId, amount, type) {
   }
 }
 
-// Fixed Referral Info Endpoint
-app.get('/referral/info', authMiddleware, async (req, res) => {
-  try {
-    const user = await User.findOne({ mobile: req.user.mobile });
-    
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Get direct referrals (Level 1)
-    const directReferrals = await User.find({ referredBy: user.referralCode });
-
-    // Get all 6 levels of referrals
-    const getAllReferrals = async (referralCode, level = 1, allRefs = []) => {
-      if (level > 6) return allRefs;
-
-      const refs = await User.find({ referredBy: referralCode }).select('mobile referralCode depositAmount totalWagered createdAt');
-      
-      for (const ref of refs) {
-        allRefs.push({
-          mobile: ref.mobile,
-          level,
-          depositAmount: ref.depositAmount || 0,
-          totalWagered: ref.totalWagered || 0,
-          joinedAt: ref.createdAt
-        });
-        
-        // Recursively get their referrals
-        await getAllReferrals(ref.referralCode, level + 1, allRefs);
-      }
-
-      return allRefs;
-    };
-
-    const allReferrals = await getAllReferrals(user.referralCode);
-
-    // Get commission history
-    const commissions = await Referral.find({ userId: user.mobile })
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    // Calculate level-wise breakdown
-    const levelBreakdown = {
-      level1: { count: 0, earnings: 0 },
-      level2: { count: 0, earnings: 0 },
-      level3: { count: 0, earnings: 0 },
-      level4: { count: 0, earnings: 0 },
-      level5: { count: 0, earnings: 0 },
-      level6: { count: 0, earnings: 0 }
-    };
-
-    allReferrals.forEach(ref => {
-      levelBreakdown[`level${ref.level}`].count += 1;
-    });
-
-    commissions.forEach(comm => {
-      levelBreakdown[`level${comm.level}`].earnings += comm.commission;
-    });
-
-    res.json({
-      referralCode: user.referralCode,
-      totalReferrals: user.totalReferrals || directReferrals.length,
-      totalEarnings: user.referralEarnings || 0,
-      directReferrals: directReferrals.length,
-      allTeamMembers: allReferrals.length,
-      teamMembers: allReferrals,
-      commissions: commissions,
-      levelBreakdown: levelBreakdown
-    });
-
-  } catch (err) {
-    console.error('Referral info error:', err);
-    res.status(500).json({ message: 'Error fetching referral data' });
-  }
-});
 /* =========================
    APP SETUP
 ========================= */
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// Request logging
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
 
 /* =========================
    ROUND STATE
@@ -195,16 +124,14 @@ let CURRENT_ROUND = {
    BASIC
 ========================= */
 app.get("/", (req, res) => {
-  res.send("BIGWIN backend running");
+  res.send("BIGWIN backend running - All systems operational ✅");
 });
 
 /* =========================
-   AUTH — USER
+   AUTH – USER
 ========================= */
 
 /* ================= REGISTER ================= */
-
-// Fixed Registration Endpoint
 app.post('/register', async (req, res) => {
   try {
     const { mobile, password, referralCode } = req.body;
@@ -257,8 +184,8 @@ app.post('/register', async (req, res) => {
     const newUser = new User({
       mobile,
       password, // NOTE: Should use bcrypt.hash(password, 10) in production
-      wallet: 100,           // ₹100 registration bonus
-      bonus: 100,            // ₹100 bonus
+      wallet: 100,
+      bonus: 100,
       deposited: false,
       depositAmount: 0,
       totalWagered: 0,
@@ -279,6 +206,8 @@ app.post('/register', async (req, res) => {
     // Generate JWT token
     const token = jwt.sign({ mobile }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
+    console.log(`✅ New user registered: ${mobile} (Referral: ${uniqueCode})`);
+
     res.status(201).json({
       message: 'Registration successful',
       token,
@@ -295,14 +224,270 @@ app.post('/register', async (req, res) => {
     res.status(500).json({ message: 'Server error during registration' });
   }
 });
-/* =========================
-   DEPOSIT – USER
-========================= */
 
-// User submits deposit request
+/* ================= LOGIN ================= */
+app.post("/login", async (req, res) => {
+  try {
+    let { mobile, password } = req.body;
+
+    if (!mobile || !password) {
+      return res.status(400).json({ error: "Mobile and password required" });
+    }
+
+    mobile = String(mobile).trim();
+
+    const user = await User.findOne({ mobile });
+
+    if (!user || user.password !== password) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const token = jwt.sign(
+      { mobile: user.mobile },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    res.json({
+      token,
+      wallet: user.wallet,
+      bonus: user.bonus
+    });
+
+  } catch (err) {
+    console.error("LOGIN ERROR:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+   USER DATA
+========================= */
+app.get("/wallet", auth, async (req, res) => {
+  try {
+    const user = await User.findOne({ mobile: req.user.mobile });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      wallet: parseFloat(user.wallet || 0).toFixed(2),
+      bonus: parseFloat(user.bonus || 0).toFixed(2),
+      totalWagered: parseFloat(user.totalWagered || 0).toFixed(2),
+      deposited: user.deposited || false,
+      depositAmount: parseFloat(user.depositAmount || 0).toFixed(2)
+    });
+
+  } catch (err) {
+    console.error('Wallet fetch error:', err);
+    res.status(500).json({ message: 'Error fetching wallet data' });
+  }
+});
+
+app.get("/profile", auth, async (req, res) => {
+  try {
+    const user = await User.findOne({ mobile: req.user.mobile });
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({
+      mobile: user.mobile,
+      wallet: user.wallet,
+      bonus: user.bonus,
+      totalWagered: user.totalWagered,
+      referralCode: user.referralCode,
+      deposited: user.deposited
+    });
+  } catch (err) {
+    console.error("Profile error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+   BETS - FIXED VERSION
+========================= */
+app.get("/bets", auth, async (req, res) => {
+  try {
+    const bets = await Bet.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.json(bets);
+  } catch (err) {
+    console.error("Bets fetch error:", err);
+    res.status(500).json({ error: "Failed to load bets" });
+  }
+});
+
+app.get("/bets/current", auth, async (req, res) => {
+  try {
+    const bets = await Bet.find({
+      mobile: req.user.mobile,
+      roundId: CURRENT_ROUND.id
+    });
+    res.json({ roundId: CURRENT_ROUND.id, bets });
+  } catch (err) {
+    console.error("Current bets error:", err);
+    res.status(500).json({ error: "Failed to load current bets" });
+  }
+});
+
+// FIXED BET ENDPOINT - Prevents freezing with concurrent users
+app.post("/bet", auth, async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Check round timing
+    const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+    
+    if (elapsed >= 60) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Round closed" });
+    }
+
+    const { color, amount } = req.body;
+    const mobile = req.user.mobile;
+
+    // Validation
+    if (!color || !['red', 'green'].includes(color.toLowerCase())) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Invalid color" });
+    }
+
+    if (!amount || amount < 1) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Minimum bet ₹1" });
+    }
+
+    // Get user with session lock
+    const user = await User.findOne({ mobile }).session(session);
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check balance
+    const totalBalance = (user.wallet || 0) + (user.bonus || 0);
+    if (totalBalance < amount) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ 
+        error: `Insufficient balance. You have ₹${totalBalance.toFixed(2)}` 
+      });
+    }
+
+    // Check for duplicate bet
+    const existingBet = await Bet.findOne({ mobile, roundId: CURRENT_ROUND.id }).session(session);
+    if (existingBet) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: `Already bet ₹${existingBet.amount} on ${existingBet.color}`
+      });
+    }
+
+    // Deduct from wallet/bonus (bonus used first)
+    let deductFromBonus = 0;
+    let deductFromWallet = 0;
+
+    if (user.bonus >= amount) {
+      deductFromBonus = amount;
+    } else {
+      deductFromBonus = user.bonus;
+      deductFromWallet = amount - user.bonus;
+    }
+
+    user.bonus = Math.max(0, Math.round((user.bonus - deductFromBonus) * 100) / 100);
+    user.wallet = Math.max(0, Math.round((user.wallet - deductFromWallet) * 100) / 100);
+    user.totalWagered = Math.round(((user.totalWagered || 0) + amount) * 100) / 100;
+
+    await user.save({ session });
+
+    // Create bet
+    const newBet = new Bet({
+      mobile,
+      roundId: CURRENT_ROUND.id,
+      color: color.toLowerCase(),
+      amount: Math.round(amount * 100) / 100,
+      status: 'PENDING',
+      createdAt: new Date()
+    });
+
+    await newBet.save({ session });
+
+    // Update round pools atomically
+    const currentRound = await Round.findOne({ roundId: CURRENT_ROUND.id }).session(session);
+    
+    if (currentRound) {
+      if (color.toLowerCase() === 'red') {
+        currentRound.redPool = Math.round((currentRound.redPool + amount) * 100) / 100;
+      } else {
+        currentRound.greenPool = Math.round((currentRound.greenPool + amount) * 100) / 100;
+      }
+      await currentRound.save({ session });
+    }
+
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
+
+    console.log(`✅ Bet placed: ${mobile} - ₹${amount} on ${color}`);
+
+    res.json({
+      message: "Bet placed successfully",
+      roundId: CURRENT_ROUND.id,
+      newWallet: user.wallet,
+      newBonus: user.bonus
+    });
+
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("BET ERROR:", err);
+    res.status(500).json({ error: "Bet failed. Please try again." });
+  }
+});
+
+/* =========================
+   ROUND INFO
+========================= */
+app.get("/round/current", (req, res) => {
+  const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+  res.json({
+    ...CURRENT_ROUND,
+    elapsed,
+    remaining: Math.max(0, 60 - elapsed)
+  });
+});
+
+app.get("/rounds/history", async (req, res) => {
+  try {
+    const rounds = await Round.find()
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .select("roundId winner redPool greenPool createdAt");
+
+    res.json(rounds);
+  } catch (err) {
+    console.error("Rounds history error:", err);
+    res.status(500).json({ error: "Failed to load rounds" });
+  }
+});
+
+/* =========================
+   DEPOSIT
+========================= */
 app.post("/deposit", auth, async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, referenceId } = req.body;
 
     if (!amount || amount < 100) {
       return res.status(400).json({ error: "Minimum deposit ₹100" });
@@ -314,34 +499,39 @@ app.post("/deposit", auth, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // ✅ AUTO-APPROVE for testing (change to PENDING for production)
+    // Create deposit record (AUTO-APPROVED for testing)
     const deposit = await Deposit.create({
       mobile: user.mobile,
       amount,
       method: "upi",
-      status: "SUCCESS" // Change to "PENDING" when you want manual approval
+      referenceId: referenceId || "AUTO",
+      status: "SUCCESS" // Change to "PENDING" for manual approval
     });
 
-    // ✅ Add money to wallet immediately
-    user.wallet += amount;
+    // Add to wallet
+    user.wallet = Math.round((user.wallet + amount) * 100) / 100;
     user.deposited = true;
-    user.depositAmount += amount;
+    user.depositAmount = Math.round((user.depositAmount + amount) * 100) / 100;
     
     // First deposit bonus (100%)
-    if (user.depositAmount === amount) {
-      user.bonus = amount;
-      user.wallet += user.bonus;
+    const isFirstDeposit = user.depositAmount === amount;
+    if (isFirstDeposit) {
+      user.bonus = Math.round((user.bonus + amount) * 100) / 100;
     }
     
     await user.save();
 
-// ✅ Process referral commission
-await processReferralCommission(user.mobile, amount, "DEPOSIT");
+    // Process referral commission
+    await processReferralCommission(user.mobile, amount, "DEPOSIT");
 
-res.json({ 
-  message: "Deposit successful",
-  newWallet: user.wallet
-});
+    console.log(`✅ Deposit: ${user.mobile} - ₹${amount} (First: ${isFirstDeposit})`);
+
+    res.json({ 
+      message: "Deposit successful",
+      newWallet: user.wallet,
+      newBonus: user.bonus,
+      bonus: isFirstDeposit ? amount : 0
+    });
 
   } catch (err) {
     console.error("Deposit error:", err);
@@ -349,7 +539,6 @@ res.json({
   }
 });
 
-// Get deposit history
 app.get("/wallet/deposit-history", auth, async (req, res) => {
   try {
     const deposits = await Deposit.find({ mobile: req.user.mobile })
@@ -362,70 +551,156 @@ app.get("/wallet/deposit-history", auth, async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
 /* =========================
-   REFERRAL SYSTEM
+   WITHDRAWAL - FIXED
 ========================= */
-
-// Get user's referral info
-app.get("/referral/info", auth, async (req, res) => {
+app.post("/withdraw", auth, async (req, res) => {
   try {
+    const { amount } = req.body;
     const user = await User.findOne({ mobile: req.user.mobile });
-    
-    // Get direct referrals
-    const directReferrals = await User.find({ referredBy: user.referralCode })
-      .select("mobile createdAt deposited depositAmount");
 
-    // Get all downline referrals (up to 6 levels)
-    const allReferrals = await getReferralTree(user.referralCode, 1);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
-    // Get commission history
-    const commissions = await Referral.find({ userId: user.mobile })
-      .sort({ createdAt: -1 })
-      .limit(50);
+    // Validation
+    if (!amount || amount < 100) {
+      return res.status(400).json({ error: "Minimum withdrawal ₹100" });
+    }
 
-    res.json({
-      referralCode: user.referralCode,
-      totalReferrals: user.totalReferrals,
-      referralEarnings: user.referralEarnings,
-      directReferrals,
-      allReferrals,
-      commissions
+    if (amount > user.wallet) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+
+    if (!user.deposited) {
+      return res.status(400).json({ error: "Please make a deposit first" });
+    }
+
+    // Check wagering requirement
+    const requiredWager = (user.depositAmount || 0) + (user.bonus || 0);
+    if (user.totalWagered < requiredWager) {
+      return res.status(400).json({ 
+        error: `Complete wagering requirement: ₹${user.totalWagered.toFixed(2)} / ₹${requiredWager.toFixed(2)}` 
+      });
+    }
+
+    // Check if withdrawal method is set
+    if (!user.withdrawMethod || !user.withdrawDetails) {
+      return res.status(400).json({ 
+        error: "Please set withdrawal method first" 
+      });
+    }
+
+    // Create withdrawal request
+    const withdrawal = await Withdraw.create({
+      mobile: user.mobile,
+      amount,
+      method: user.withdrawMethod,
+      details: user.withdrawDetails,
+      status: "PENDING"
     });
+
+    // Deduct from wallet (held until admin approval)
+    user.wallet = Math.round((user.wallet - amount) * 100) / 100;
+    await user.save();
+
+    console.log(`✅ Withdrawal requested: ${user.mobile} - ₹${amount}`);
+
+    res.json({ 
+      message: "Withdrawal request submitted",
+      newWallet: user.wallet
+    });
+
   } catch (err) {
-    console.error("Referral info error:", err);
-    res.status(500).json({ error: "Failed to load referral info" });
+    console.error("Withdraw error:", err);
+    res.status(500).json({ error: "Withdrawal failed" });
   }
 });
 
-// Get referral tree
-async function getReferralTree(referralCode, currentLevel) {
-  if (currentLevel > 6) return [];
-
-  const users = await User.find({ referredBy: referralCode })
-    .select("mobile referralCode createdAt deposited depositAmount");
-
-  const tree = [];
-
-  for (const user of users) {
-    const children = await getReferralTree(user.referralCode, currentLevel + 1);
+app.get("/wallet/withdraw-history", auth, async (req, res) => {
+  try {
+    const withdrawals = await Withdraw.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(20);
     
-    tree.push({
-      mobile: user.mobile,
-      level: currentLevel,
-      deposited: user.deposited,
-      depositAmount: user.depositAmount,
-      joinedAt: user.createdAt,
-      children
-    });
+    res.json(withdrawals);
+  } catch (err) {
+    console.error("Withdraw history error:", err);
+    res.status(500).json({ error: "Server error" });
   }
+});
 
-  return tree;
-}
+// FIXED - Save withdrawal method
+app.post('/withdraw/method', auth, async (req, res) => {
+  try {
+    const { method, details } = req.body;
+
+    if (!method || !details) {
+      return res.status(400).json({ message: 'Method and details required' });
+    }
+
+    // Validate method type
+    if (!['upi', 'bank', 'usdt'].includes(method)) {
+      return res.status(400).json({ message: 'Invalid withdrawal method' });
+    }
+
+    // Validate details based on method
+    if (method === 'upi') {
+      if (!details.upiId || !/^[\w.-]+@[\w.-]+$/.test(details.upiId)) {
+        return res.status(400).json({ message: 'Invalid UPI ID format' });
+      }
+    } else if (method === 'bank') {
+      if (!details.accountNumber || !details.ifsc || !details.accountHolder) {
+        return res.status(400).json({ message: 'Bank details incomplete' });
+      }
+    }
+
+    // Update user
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.withdrawMethod = method;
+    user.withdrawDetails = details;
+    await user.save();
+
+    console.log(`✅ Withdrawal method saved: ${user.mobile} - ${method}`);
+
+    res.json({
+      message: 'Withdrawal method saved successfully',
+      method: user.withdrawMethod,
+      details: user.withdrawDetails
+    });
+
+  } catch (err) {
+    console.error('Save withdraw method error:', err);
+    res.status(500).json({ message: 'Error saving withdrawal method' });
+  }
+});
+
+app.get('/withdraw/method', auth, async (req, res) => {
+  try {
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      method: user.withdrawMethod,
+      details: user.withdrawDetails
+    });
+
+  } catch (err) {
+    console.error('Get withdraw method error:', err);
+    res.status(500).json({ message: 'Error fetching withdrawal method' });
+  }
+});
+
 /* =========================
    WALLET HISTORY
 ========================= */
-
-// Combined wallet history (deposits + withdrawals + bets)
 app.get("/wallet/history", auth, async (req, res) => {
   try {
     const deposits = await Deposit.find({ mobile: req.user.mobile })
@@ -436,7 +711,7 @@ app.get("/wallet/history", auth, async (req, res) => {
     const withdrawals = await Withdraw.find({ mobile: req.user.mobile })
       .sort({ createdAt: -1 })
       .limit(10)
-      .lean();
+            .lean();
 
     const history = [
       ...deposits.map(d => ({ ...d, type: 'deposit' })),
@@ -451,55 +726,88 @@ app.get("/wallet/history", auth, async (req, res) => {
   }
 });
 
-// Withdraw history only
-app.get("/wallet/withdraw-history", auth, async (req, res) => {
+/* =========================
+   REFERRAL SYSTEM - FIXED
+========================= */
+app.get("/referral/info", auth, async (req, res) => {
   try {
-    const withdrawals = await Withdraw.find({ mobile: req.user.mobile })
-      .sort({ createdAt: -1 })
-      .limit(20);
+    const user = await User.findOne({ mobile: req.user.mobile });
     
-    res.json(withdrawals);
-  } catch (err) {
-    console.error("Withdraw history error:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-/* ================= LOGIN ================= */
-
-app.post("/login", async (req, res) => {
-  try {
-    let { mobile, password } = req.body;
-
-    if (!mobile || !password) {
-      return res.status(400).json({ error: "Mobile and password required" });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
     }
 
-    mobile = String(mobile).trim(); // ✅ same format as register
+    // Get direct referrals (Level 1)
+    const directReferrals = await User.find({ referredBy: user.referralCode });
 
-    const user = await User.findOne({ mobile });
+    // Get all 6 levels of referrals recursively
+    const getAllReferrals = async (referralCode, level = 1, allRefs = []) => {
+      if (level > 6) return allRefs;
 
-    if (!user || user.password !== password) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
+      const refs = await User.find({ referredBy: referralCode })
+        .select('mobile referralCode depositAmount totalWagered createdAt deposited');
+      
+      for (const ref of refs) {
+        allRefs.push({
+          mobile: ref.mobile,
+          level,
+          depositAmount: ref.depositAmount || 0,
+          totalWagered: ref.totalWagered || 0,
+          deposited: ref.deposited || false,
+          joinedAt: ref.createdAt
+        });
+        
+        // Recursively get their referrals
+        await getAllReferrals(ref.referralCode, level + 1, allRefs);
+      }
 
-    const token = jwt.sign(
-      { mobile: user.mobile },
-      process.env.JWT_SECRET
-    );
+      return allRefs;
+    };
+
+    const allReferrals = await getAllReferrals(user.referralCode);
+
+    // Get commission history
+    const commissions = await Referral.find({ userId: user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    // Calculate level-wise breakdown
+    const levelBreakdown = {
+      level1: { count: 0, earnings: 0 },
+      level2: { count: 0, earnings: 0 },
+      level3: { count: 0, earnings: 0 },
+      level4: { count: 0, earnings: 0 },
+      level5: { count: 0, earnings: 0 },
+      level6: { count: 0, earnings: 0 }
+    };
+
+    allReferrals.forEach(ref => {
+      levelBreakdown[`level${ref.level}`].count += 1;
+    });
+
+    commissions.forEach(comm => {
+      levelBreakdown[`level${comm.level}`].earnings += comm.commission;
+    });
 
     res.json({
-      token,
-      wallet: user.wallet
+      referralCode: user.referralCode,
+      totalReferrals: user.totalReferrals || directReferrals.length,
+      totalEarnings: user.referralEarnings || 0,
+      directReferrals: directReferrals.length,
+      allTeamMembers: allReferrals.length,
+      teamMembers: allReferrals,
+      commissions: commissions,
+      levelBreakdown: levelBreakdown
     });
 
   } catch (err) {
-    console.error("LOGIN ERROR:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error('Referral info error:', err);
+    res.status(500).json({ message: 'Error fetching referral data' });
   }
 });
 
 /* =========================
-   AUTH — ADMIN
+   ADMIN ROUTES
 ========================= */
 app.post("/admin/login", (req, res) => {
   const { username, password } = req.body;
@@ -520,305 +828,302 @@ app.post("/admin/login", (req, res) => {
   res.status(401).json({ error: "Invalid admin credentials" });
 });
 
-/* =========================
-   USER DATA
-========================= */
-app.get("/wallet", auth, async (req, res) => {
-  const u = await User.findOne({ mobile: req.user.mobile });
-  res.json({ wallet: u.wallet });
-});
-
-app.get("/profile", auth, async (req, res) => {
-  const u = await User.findOne({ mobile: req.user.mobile });
-  res.json({
-    mobile: u.mobile,
-    wallet: u.wallet,
-    totalWagered: u.totalWagered
-  });
-});
-
-/* =========================
-   BETS
-========================= */
-app.get("/bets", auth, async (req, res) => {
-  const bets = await Bet.find({ mobile: req.user.mobile })
-    .sort({ createdAt: -1 })
-    .limit(20);
-  res.json(bets);
-});
-
-app.get("/bets/current", auth, async (req, res) => {
-  const bets = await Bet.find({
-    mobile: req.user.mobile,
-    roundId: CURRENT_ROUND.id
-  });
-  res.json({ roundId: CURRENT_ROUND.id, bets });
-});
-
-app.post("/bet", auth, async (req, res) => {
+app.get("/admin/stats", adminAuth, async (req, res) => {
   try {
-    const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+    const totalUsers = await User.countDocuments();
+    const totalDeposits = await Deposit.aggregate([
+      { $match: { status: "SUCCESS" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+    const totalWithdraws = await Withdraw.aggregate([
+      { $match: { status: "APPROVED" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+    const totalWallet = await User.aggregate([
+      { $group: { _id: null, total: { $sum: "$wallet" } } }
+    ]);
+    const totalRounds = await Round.countDocuments();
+
+    const profit = (totalDeposits[0]?.total || 0) - (totalWithdraws[0]?.total || 0);
+
+    res.json({
+      totalUsers,
+      totalDeposits: totalDeposits[0]?.total || 0,
+      totalWithdraws: totalWithdraws[0]?.total || 0,
+      totalWallet: totalWallet[0]?.total || 0,
+      profit,
+      totalRounds
+    });
+  } catch (err) {
+    console.error("Admin stats error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/users", adminAuth, async (req, res) => {
+  try {
+    const users = await User.find()
+      .select('-password')
+      .sort({ createdAt: -1 })
+      .limit(100);
     
-    if (elapsed >= 60) {  // ✅ Changed from 30 to 60 
-      return res.status(400).json({ error: "Round closed" });
-    }
+    res.json(users);
+  } catch (err) {
+    console.error("Admin users error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 
-    const { color, amount } = req.body;
-
-    // Validate inputs
-    if (!color || !["red", "green"].includes(color)) {
-      return res.status(400).json({ error: "Invalid color" });
-    }
-
-    if (!amount || amount < 1) {
-      return res.status(400).json({ error: "Minimum bet ₹1" });
-    }
-
-    const user = await User.findOne({ mobile: req.user.mobile });
+app.post("/admin/user/balance", adminAuth, async (req, res) => {
+  try {
+    const { mobile, amount, type } = req.body;
+    const user = await User.findOne({ mobile });
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    if (amount > user.wallet) {
-      return res.status(400).json({ error: "Insufficient balance" });
+    if (type === 'add') {
+      user.wallet += amount;
+    } else {
+      user.wallet -= amount;
     }
 
-    // ✅ ATOMIC CHECK: Prevent duplicate bets
-    const existingBet = await Bet.findOne({
-      mobile: user.mobile,
-      roundId: CURRENT_ROUND.id
-    });
-
-    if (existingBet) {
-      return res.status(400).json({
-        error: `Already bet ₹${existingBet.amount} on ${existingBet.color}`
-      });
-    }
-
-    // ✅ Deduct wallet first
-    user.wallet -= amount;
-    user.totalWagered = (user.totalWagered || 0) + amount;
     await user.save();
+    res.json({ message: "Balance updated", newWallet: user.wallet });
+  } catch (err) {
+    console.error("Admin balance update error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 
-    // ✅ Then create bet
-    const bet = await Bet.create({
-      mobile: user.mobile,
-      color,
-      amount,
-      roundId: CURRENT_ROUND.id,
-      status: "PENDING"
-    });
+app.get("/admin/deposits", adminAuth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(100);
+    
+    res.json(deposits);
+  } catch (err) {
+    console.error("Admin deposits error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, adminNote } = req.body;
+
+    const deposit = await Deposit.findById(id);
+    if (!deposit) {
+      return res.status(404).json({ error: "Deposit not found" });
+    }
+
+    if (deposit.status !== "PENDING") {
+      return res.status(400).json({ error: "Deposit already processed" });
+    }
+
+    const user = await User.findOne({ mobile: deposit.mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (action === "approve") {
+      deposit.status = "SUCCESS";
+      deposit.adminNote = adminNote || "Approved";
+      
+      // Add to wallet
+      user.wallet = Math.round((user.wallet + deposit.amount) * 100) / 100;
+      user.deposited = true;
+      user.depositAmount = Math.round((user.depositAmount + deposit.amount) * 100) / 100;
+      
+      // First deposit bonus
+      const isFirstDeposit = user.depositAmount === deposit.amount;
+      if (isFirstDeposit) {
+        user.bonus = Math.round((user.bonus + deposit.amount) * 100) / 100;
+      }
+      
+      await user.save();
+      
+      // Process referral commission
+      await processReferralCommission(user.mobile, deposit.amount, "DEPOSIT");
+      
+    } else if (action === "reject") {
+      deposit.status = "FAILED";
+      deposit.adminNote = adminNote || "Rejected";
+    }
+
+    await deposit.save();
+
+    console.log(`✅ Admin ${action}d deposit: ${deposit.mobile} - ₹${deposit.amount}`);
 
     res.json({ 
-      message: "Bet placed successfully",
-      roundId: CURRENT_ROUND.id,
-      newWallet: user.wallet
+      message: `Deposit ${action}d successfully`,
+      deposit 
     });
 
   } catch (err) {
-    console.error("BET ERROR:", err);
-    res.status(500).json({ error: "Bet failed. Please try again." });
+    console.error("Admin deposit action error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
-/* =========================
-   ROUND INFO
-========================= */
-app.get("/round/current", (req, res) => {
-  res.json(CURRENT_ROUND);
-});
 
-app.get("/rounds/history", async (req, res) => {
+app.get("/admin/withdraws", adminAuth, async (req, res) => {
   try {
-    const rounds = await Round.find()
+    const withdrawals = await Withdraw.find()
       .sort({ createdAt: -1 })
-      .limit(20)
-      .select("roundId winner createdAt");
-
-    res.json(rounds);
+      .limit(100);
+    
+    res.json(withdrawals);
   } catch (err) {
-    console.error("Rounds history error:", err);
-    res.status(500).json({ error: "Failed to load rounds" });
+    console.error("Admin withdraws error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
-// Fixed /bet endpoint with proper concurrency handling
 
-app.post('/bet', authMiddleware, async (req, res) => {
-  // Use Mongoose session for transaction
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
   try {
-    const { color, amount } = req.body;
-    const mobile = req.user.mobile;
+    const { id } = req.params;
+    const { action, adminNote } = req.body;
 
-    // Validation
-    if (!color || !amount) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: 'Color and amount required' });
+    const withdrawal = await Withdraw.findById(id);
+    if (!withdrawal) {
+      return res.status(404).json({ error: "Withdrawal not found" });
     }
 
-    if (!['red', 'green'].includes(color.toLowerCase())) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: 'Invalid color' });
+    if (withdrawal.status !== "PENDING") {
+      return res.status(400).json({ error: "Withdrawal already processed" });
     }
 
-    if (amount < 1) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: 'Minimum bet is ₹1' });
-    }
-
-    // Get user with lock (prevents race conditions)
-    const user = await User.findOne({ mobile }).session(session);
+    const user = await User.findOne({ mobile: withdrawal.mobile });
     if (!user) {
-      await session.abortTransaction();
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ error: "User not found" });
     }
 
-    // Check sufficient balance
-    const totalBalance = (user.wallet || 0) + (user.bonus || 0);
-    if (totalBalance < amount) {
-      await session.abortTransaction();
-      return res.status(400).json({ 
-        message: `Insufficient balance. You have ₹${totalBalance.toFixed(2)}` 
-      });
+    if (action === "approve") {
+      withdrawal.status = "APPROVED";
+      withdrawal.adminNote = adminNote || "Approved";
+      withdrawal.processedAt = new Date();
+      
+      // Money already deducted when request was created
+      
+    } else if (action === "reject") {
+      withdrawal.status = "REJECTED";
+      withdrawal.adminNote = adminNote || "Rejected";
+      
+      // Refund to wallet
+      user.wallet = Math.round((user.wallet + withdrawal.amount) * 100) / 100;
+      await user.save();
     }
 
-    // Get current round
-    const currentRound = await Round.findOne().sort({ createdAt: -1 }).session(session);
-    if (!currentRound) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: 'No active round' });
-    }
+    await withdrawal.save();
 
-    const roundId = currentRound.roundId;
+    console.log(`✅ Admin ${action}d withdrawal: ${withdrawal.mobile} - ₹${withdrawal.amount}`);
 
-    // Check if user already bet in this round
-    const existingBet = await Bet.findOne({ mobile, roundId }).session(session);
-    if (existingBet) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: 'You already placed a bet this round' });
-    }
-
-    // Deduct from wallet/bonus (bonus used first)
-    let deductFromBonus = 0;
-    let deductFromWallet = 0;
-
-    if (user.bonus >= amount) {
-      deductFromBonus = amount;
-    } else {
-      deductFromBonus = user.bonus;
-      deductFromWallet = amount - user.bonus;
-    }
-
-    user.bonus = Math.max(0, user.bonus - deductFromBonus);
-    user.wallet = Math.max(0, user.wallet - deductFromWallet);
-    user.totalWagered = (user.totalWagered || 0) + amount;
-
-    // Round to 2 decimals
-    user.bonus = Math.round(user.bonus * 100) / 100;
-    user.wallet = Math.round(user.wallet * 100) / 100;
-    user.totalWagered = Math.round(user.totalWagered * 100) / 100;
-
-    await user.save({ session });
-
-    // Create bet
-    const newBet = new Bet({
-      mobile,
-      roundId,
-      color: color.toLowerCase(),
-      amount: Math.round(amount * 100) / 100,
-      status: 'PENDING',
-      createdAt: new Date()
-    });
-
-    await newBet.save({ session });
-
-    // Update round pool atomically
-    if (color.toLowerCase() === 'red') {
-      currentRound.redPool = Math.round((currentRound.redPool + amount) * 100) / 100;
-    } else {
-      currentRound.greenPool = Math.round((currentRound.greenPool + amount) * 100) / 100;
-    }
-
-    await currentRound.save({ session });
-
-    // Commit transaction
-    await session.commitTransaction();
-    session.endSession();
-
-    res.json({
-      message: 'Bet placed successfully',
-      bet: {
-        color: newBet.color,
-        amount: newBet.amount,
-        roundId: newBet.roundId
-      },
-      balance: {
-        wallet: user.wallet,
-        bonus: user.bonus,
-        total: user.wallet + user.bonus
-      }
+    res.json({ 
+      message: `Withdrawal ${action}d successfully`,
+      withdrawal 
     });
 
   } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error('Bet placement error:', err);
-    res.status(500).json({ message: 'Error placing bet. Please try again.' });
+    console.error("Admin withdraw action error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
-/* =========================
-   ROUND RESOLUTION
-========================= */
-async function resolveRound() {
-  const roundId = CURRENT_ROUND.id;
-  const bets = await Bet.find({ roundId });
 
-  let redPool = 0;
-  let greenPool = 0;
+app.get("/admin/transactions", adminAuth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
 
-  bets.forEach(b => {
-    if (b.color === "red") redPool += b.amount;
-    if (b.color === "green") greenPool += b.amount;
-  });
+    const withdrawals = await Withdraw.find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
 
-  const winner =
-    redPool === greenPool
-      ? Math.random() < 0.5 ? "red" : "green"
-      : redPool < greenPool ? "red" : "green";
+    const bets = await Bet.find()
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
 
-  for (const bet of bets) {
-    if (bet.color === winner) {
-      bet.status = "WON";
-      
-      // ✅ CORRECT: bet × 2 × 0.98 = payout
-      const payout = bet.amount * 2 * 0.98;
-      
-      await User.updateOne(
-        { mobile: bet.mobile },
-        { $inc: { wallet: payout } }
-      );
-    } else {
-      bet.status = "LOST";
-    }
-    await bet.save();
+    const transactions = [
+      ...deposits.map(d => ({ ...d, type: 'deposit' })),
+      ...withdrawals.map(w => ({ ...w, type: 'withdraw' })),
+      ...bets.map(b => ({ ...b, type: 'bet' }))
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+     .slice(0, 100);
+
+    res.json(transactions);
+  } catch (err) {
+    console.error("Admin transactions error:", err);
+    res.status(500).json({ error: "Server error" });
   }
+});
 
-  await Round.create({ roundId, redPool, greenPool, winner });
+app.get("/admin/recent-activity", adminAuth, async (req, res) => {
+  try {
+    const recentBets = await Bet.find()
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
 
-  CURRENT_ROUND = {
-    id: Date.now().toString(),
-    startTime: Date.now()
-  };
-}
-// Fixed Bet Processing Logic - Add this to your round ending code
+    const recentDeposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean();
 
+    const recentWithdrawals = await Withdraw.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean();
+
+    const activity = [
+      ...recentBets.map(b => ({ 
+        type: 'bet', 
+        user: b.mobile, 
+        amount: b.amount,
+        details: `${b.color.toUpperCase()} - ${b.status}`,
+        time: b.createdAt 
+      })),
+      ...recentDeposits.map(d => ({ 
+        type: 'deposit', 
+        user: d.mobile, 
+        amount: d.amount,
+        details: d.status,
+        time: d.createdAt 
+      })),
+      ...recentWithdrawals.map(w => ({ 
+        type: 'withdrawal', 
+        user: w.mobile, 
+        amount: w.amount,
+        details: w.status,
+        time: w.createdAt 
+      }))
+    ].sort((a, b) => new Date(b.time) - new Date(a.time))
+     .slice(0, 20);
+
+    res.json(activity);
+  } catch (err) {
+    console.error("Admin activity error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+   ROUND MANAGEMENT SYSTEM
+========================= */
+
+// Fixed Bet Processing Logic
 async function processRoundEnd(roundId) {
   try {
+    console.log(`\n🎮 Processing round ${roundId}...`);
+
     const round = await Round.findOne({ roundId });
     if (!round) {
-      console.error('Round not found:', roundId);
+      console.error('❌ Round not found:', roundId);
       return;
     }
 
@@ -836,16 +1141,21 @@ async function processRoundEnd(roundId) {
     round.winner = winner;
     await round.save();
 
+    console.log(`📊 Pools - Red: ₹${redPool}, Green: ₹${greenPool}`);
+    console.log(`🏆 Winner: ${winner.toUpperCase()}`);
+
     // Get all bets for this round
     const bets = await Bet.find({ roundId, status: 'PENDING' });
 
-    console.log(`Processing ${bets.length} bets for round ${roundId}`);
-    console.log(`Winner: ${winner}, Red Pool: ${redPool}, Green Pool: ${greenPool}`);
+    console.log(`💰 Processing ${bets.length} bets...`);
 
     // Process each bet
     for (const bet of bets) {
       const user = await User.findOne({ mobile: bet.mobile });
-      if (!user) continue;
+      if (!user) {
+        console.log(`⚠️ User not found: ${bet.mobile}`);
+        continue;
+      }
 
       if (bet.color === winner) {
         // WINNER - Pay 1.96x (2x with 2% house edge)
@@ -870,458 +1180,81 @@ async function processRoundEnd(roundId) {
       await bet.save();
     }
 
-    console.log(`✅ Round ${roundId} processed successfully`);
+    console.log(`✅ Round ${roundId} processed successfully\n`);
 
   } catch (err) {
-    console.error('Error processing round:', err);
+    console.error('❌ Error processing round:', err);
   }
 }
 
-// Call this function when round timer ends
-// Example: After 60 seconds
-setTimeout(() => {
-  processRoundEnd(currentRoundId);
-}, 60000);
-/* =========================
-   AUTO ROUND TIMER (60s)
-========================= */
+// Round timer - 60 seconds
 setInterval(async () => {
   const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
-  if (elapsed >= 60) {  // ✅ Changed from 30 to 60
-    await resolveRound();
+
+  if (elapsed >= 60) {
+    console.log('\n⏰ Round ending...');
+    
+    // Save current round to database
+    const roundDoc = await Round.findOne({ roundId: CURRENT_ROUND.id });
+    if (roundDoc) {
+      await processRoundEnd(CURRENT_ROUND.id);
+    }
+
+    // Start new round
+    CURRENT_ROUND = {
+      id: Date.now().toString(),
+      startTime: Date.now()
+    };
+
+    // Create new round in database
+    await Round.create({
+      roundId: CURRENT_ROUND.id,
+      redPool: 0,
+      greenPool: 0,
+      winner: null
+    });
+
+    console.log(`🎮 New round started: ${CURRENT_ROUND.id}\n`);
   }
-}, 1000);
+}, 1000); // Check every second
 
-/* =========================
-   WITHDRAW — USER
-========================= */
-app.post("/withdraw", auth, async (req, res) => {
+// Initialize first round on startup
+(async () => {
   try {
-    const { amount } = req.body;
-    const user = await User.findOne({ mobile: req.user.mobile });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    if (amount < 100) {
-      return res.status(400).json({ error: "Minimum ₹100" });
-    }
-
-    if (!user.deposited) {
-      return res.status(400).json({ error: "Deposit required first" });
-    }
-
-    if (amount > user.wallet) {
-      return res.status(400).json({ error: "Insufficient balance" });
-    }
-
-    // ✅ Must wager (deposit + bonus) before withdrawal
-    const requiredWager = user.depositAmount + user.bonus;
-    const remainingWager = requiredWager - (user.totalWagered || 0);
-
-    if (remainingWager > 0) {
-      return res.status(400).json({
-        error: `Wager ₹${remainingWager} more to withdraw`
+    console.log('🚀 Initializing first round...');
+    
+    const existingRound = await Round.findOne({ roundId: CURRENT_ROUND.id });
+    if (!existingRound) {
+      await Round.create({
+        roundId: CURRENT_ROUND.id,
+        redPool: 0,
+        greenPool: 0,
+        winner: null
       });
+      console.log('✅ First round created');
+    } else {
+      console.log('✅ Using existing round');
     }
-
-    await Withdraw.create({
-      mobile: user.mobile,
-      amount,
-      method: user.withdrawMethod || "upi",
-      details: user.withdrawDetails || {}
-    });
-
-    user.wallet -= amount;
-    await user.save();
-
-    res.json({ message: "Withdraw request submitted" });
-
   } catch (err) {
-    console.error("Withdraw error:", err);
-    res.status(500).json({ error: "Withdraw failed" });
+    console.error('❌ Round initialization error:', err);
   }
-});
-/* =========================
-   SAVE WITHDRAWAL METHOD
-========================= */
-// Add this endpoint to server.js
-
-app.post('/withdraw/method', authMiddleware, async (req, res) => {
-  try {
-    const { method, details } = req.body;
-
-    if (!method || !details) {
-      return res.status(400).json({ message: 'Method and details required' });
-    }
-
-    // Validate method type
-    if (!['upi', 'bank', 'usdt'].includes(method)) {
-      return res.status(400).json({ message: 'Invalid withdrawal method' });
-    }
-
-    // Validate details based on method
-    if (method === 'upi') {
-      if (!details.upiId || !/^[\w.-]+@[\w.-]+$/.test(details.upiId)) {
-        return res.status(400).json({ message: 'Invalid UPI ID format' });
-      }
-    } else if (method === 'bank') {
-      if (!details.accountNumber || !details.ifsc || !details.accountHolder) {
-        return res.status(400).json({ message: 'Bank details incomplete' });
-      }
-      if (!/^[0-9]{9,18}$/.test(details.accountNumber)) {
-        return res.status(400).json({ message: 'Invalid account number' });
-      }
-      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(details.ifsc)) {
-        return res.status(400).json({ message: 'Invalid IFSC code' });
-      }
-    } else if (method === 'usdt') {
-      if (!details.walletAddress || details.walletAddress.length < 26) {
-        return res.status(400).json({ message: 'Invalid USDT wallet address' });
-      }
-    }
-
-    // Update user
-    const user = await User.findOne({ mobile: req.user.mobile });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    user.withdrawMethod = method;
-    user.withdrawDetails = details;
-    await user.save();
-
-    res.json({
-      message: 'Withdrawal method saved successfully',
-      method: user.withdrawMethod,
-      details: user.withdrawDetails
-    });
-
-  } catch (err) {
-    console.error('Save withdraw method error:', err);
-    res.status(500).json({ message: 'Error saving withdrawal method' });
-  }
-});
-
-// Get withdrawal method
-app.get('/withdraw/method', authMiddleware, async (req, res) => {
-  try {
-    const user = await User.findOne({ mobile: req.user.mobile });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    res.json({
-      method: user.withdrawMethod,
-      details: user.withdrawDetails
-    });
-
-  } catch (err) {
-    console.error('Get withdraw method error:', err);
-    res.status(500).json({ message: 'Error fetching withdrawal method' });
-  }
-});
-/* =========================
-   ADMIN — WITHDRAW
-========================= */
-app.get("/admin/withdraws", adminAuth, async (req, res) => {
-  const list = await Withdraw.find().sort({ createdAt: -1 });
-  res.json(list);
-});
-
-app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
-  const { status, adminNote } = req.body;
-
-  if (!["APPROVED", "REJECTED"].includes(status)) {
-    return res.status(400).json({ error: "Invalid status" });
-  }
-
-  const w = await Withdraw.findById(req.params.id);
-  if (!w) return res.status(404).json({ error: "Not found" });
-  if (w.status !== "PENDING") {
-    return res.status(400).json({ error: "Already processed" });
-  }
-
-  w.status = status;
-  w.adminNote = adminNote || "";
-  w.processedAt = new Date();
-
-  if (status === "REJECTED") {
-    await User.updateOne(
-      { mobile: w.mobile },
-      { $inc: { wallet: w.amount } }
-    );
-  }
-
-  await w.save();
-  res.json({ message: `Withdraw ${status.toLowerCase()}` });
-});
-/* =========================
-   ADMIN – DEPOSITS
-========================= */
-
-// Get all deposits
-app.get("/admin/deposits", adminAuth, async (req, res) => {
-  try {
-    const deposits = await Deposit.find()
-      .sort({ createdAt: -1 })
-      .limit(50);
-    
-    res.json(deposits);
-  } catch (err) {
-    console.error("Admin deposits error:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// Approve/reject deposit (for manual approval mode)
-app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
-  try {
-    const { status, adminNote } = req.body;
-
-    if (!["SUCCESS", "FAILED"].includes(status)) {
-      return res.status(400).json({ error: "Invalid status" });
-    }
-
-    const deposit = await Deposit.findById(req.params.id);
-    
-    if (!deposit) {
-      return res.status(404).json({ error: "Deposit not found" });
-    }
-
-    if (deposit.status !== "PENDING") {
-      return res.status(400).json({ error: "Already processed" });
-    }
-
-    deposit.status = status;
-    deposit.adminNote = adminNote || "";
-    await deposit.save();
-
-    // If approved, add money to user wallet
-    if (status === "SUCCESS") {
-      const user = await User.findOne({ mobile: deposit.mobile });
-      
-      if (!user) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      user.wallet += deposit.amount;
-      user.deposited = true;
-      user.depositAmount += deposit.amount;
-      
-      // First deposit bonus
-      if (user.depositAmount === deposit.amount) {
-        user.bonus = deposit.amount;
-        user.wallet += user.bonus;
-      }
-      
-      await user.save();
-    }
-
-    res.json({ 
-      message: `Deposit ${status.toLowerCase()}`,
-      deposit 
-    });
-
-  } catch (err) {
-    console.error("Admin deposit approval error:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-/* =========================
-   ADMIN - USERS
-========================= */
-app.get("/admin/users", adminAuth, async (req, res) => {
-  try {
-    const users = await User.find()
-      .sort({ createdAt: -1 })
-      .select("-password")
-      .limit(100);
-    
-    res.json(users);
-  } catch (err) {
-    console.error("Admin users error:", err);
-    res.status(500).json({ error: "Failed to load users" });
-  }
-});
-
-app.post("/admin/user/balance", adminAuth, async (req, res) => {
-  try {
-    const { mobile, amount } = req.body;
-
-    const user = await User.findOne({ mobile });
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    user.wallet += amount;
-    await user.save();
-
-    res.json({ 
-      message: `Balance ${amount > 0 ? 'added' : 'deducted'} successfully`,
-      newBalance: user.wallet
-    });
-  } catch (err) {
-    console.error("Balance update error:", err);
-    res.status(500).json({ error: "Failed to update balance" });
-  }
-});
+})();
 
 /* =========================
-   ADMIN - TRANSACTIONS
-========================= */
-app.get("/admin/transactions", adminAuth, async (req, res) => {
-  try {
-    const deposits = await Deposit.find()
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
-
-    const withdrawals = await Withdraw.find()
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
-
-    const bets = await Bet.find()
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
-
-    const transactions = [
-      ...deposits.map(d => ({ ...d, type: 'deposits' })),
-      ...withdrawals.map(w => ({ ...w, type: 'withdrawals' })),
-      ...bets.map(b => ({ ...b, type: 'bets' }))
-    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    res.json(transactions);
-  } catch (err) {
-    console.error("Transactions error:", err);
-    res.status(500).json({ error: "Failed to load transactions" });
-  }
-});
-
-/* =========================
-   ADMIN - RECENT ACTIVITY
-========================= */
-app.get("/admin/recent-activity", adminAuth, async (req, res) => {
-  try {
-    const deposits = await Deposit.find()
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .lean();
-
-    const withdrawals = await Withdraw.find()
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .lean();
-
-    const activity = [
-      ...deposits.map(d => ({ ...d, type: 'DEPOSIT' })),
-      ...withdrawals.map(w => ({ ...w, type: 'WITHDRAWAL' }))
-    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-     .slice(0, 10);
-
-    res.json(activity);
-  } catch (err) {
-    console.error("Recent activity error:", err);
-    res.status(500).json({ error: "Failed to load activity" });
-  }
-});
-
-/* =========================
-   ADMIN - SETTINGS
-========================= */
-app.get("/admin/settings", adminAuth, async (req, res) => {
-  try {
-    // For now, return default settings
-    // TODO: Store in database
-    res.json({
-      minBet: 1,
-      maxBet: 10000,
-      houseEdge: 0.02,
-      minDeposit: 100,
-      minWithdraw: 100,
-      upiId: process.env.UPI_ID || "",
-      bonusPercent: 100
-    });
-  } catch (err) {
-    console.error("Settings error:", err);
-    res.status(500).json({ error: "Failed to load settings" });
-  }
-});
-
-app.post("/admin/settings", adminAuth, async (req, res) => {
-  try {
-    const { key, value } = req.body;
-    
-    // TODO: Store in database
-    
-    res.json({ message: "Setting updated successfully" });
-  } catch (err) {
-    console.error("Update settings error:", err);
-    res.status(500).json({ error: "Failed to update settings" });
-  }
-});
-/* =========================
-   START SERVER
+   SERVER START
 ========================= */
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log("🚀 BIGWIN backend running on", PORT);
-});
-// ================= ADMIN STATS =================
-app.get("/admin/stats", adminAuth, async (req, res) => {
-  try {
-    const usersCount = await User.countDocuments();
-
-    const walletAgg = await User.aggregate([
-      { $group: { _id: null, total: { $sum: "$wallet" } } }
-    ]);
-    const totalWallet = walletAgg[0]?.total || 0;
-
-    const depositAgg = await Deposit.aggregate([
-      { $match: { status: "SUCCESS" } },  // ✅ Changed from APPROVED
-      { $group: { _id: null, total: { $sum: "$amount" } } }
-    ]);
-    const totalDeposits = depositAgg[0]?.total || 0;
-
-    const withdrawAgg = await Withdraw.aggregate([
-      { $match: { status: "APPROVED" } },  // ✅ This is correct
-      { $group: { _id: null, total: { $sum: "$amount" } } }
-    ]);
-    const totalWithdrawals = withdrawAgg[0]?.total || 0;
-
-    const betAgg = await Bet.aggregate([
-      { $group: { _id: null, total: { $sum: "$amount" } } }
-    ]);
-    const totalBets = betAgg[0]?.total || 0;
-
-    const payoutAgg = await Bet.aggregate([
-      { $match: { status: "WON" } },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: { $multiply: ["$amount", 2, 0.98] } }
-        }
-      }
-    ]);
-    const totalPayout = payoutAgg[0]?.total || 0;
-
-    const profit = totalBets - totalPayout;
-
-    const roundsCount = await Round.countDocuments();
-
-    res.json({
-      users: usersCount,           // ✅ Changed from totalUsers
-      deposits: totalDeposits,      // ✅ Changed from totalDeposits
-      withdrawals: totalWithdrawals, // ✅ Changed from totalWithdrawals
-      wallet: totalWallet,          // ✅ Changed from totalWallet
-      profit,
-      rounds: roundsCount           // ✅ Changed from totalRounds
-    });
-  } catch (err) {
-    console.error("Admin stats error:", err);
-    res.status(500).json({ error: "Admin stats failed" });
-  }
-});
+  console.log('\n' + '='.repeat(50));
+  console.log('🎮 BIGWIN Backend Server');
+  console.log('='.repeat(50));
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`🌐 API URL: http://localhost:${PORT}`);
+  console.log(`📊 MongoDB: Connected`);
+  console.log(`⏰ Round Duration: 60 seconds`);
+  console.log(`💰 House Edge: 2%`);
+  console.log(`🎁 Registration Bonus: ₹100 + ₹100`);
+  console.log(`🔗 Referral Levels: 6 (22% total)`);
+  console.log('='.repeat(50) + '\n');
+})
