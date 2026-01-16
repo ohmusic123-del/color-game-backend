@@ -641,7 +641,133 @@ app.get("/rounds/history", async (req, res) => {
     res.status(500).json({ error: "Failed to load rounds" });
   }
 });
+// Fixed /bet endpoint with proper concurrency handling
 
+app.post('/bet', authMiddleware, async (req, res) => {
+  // Use Mongoose session for transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { color, amount } = req.body;
+    const mobile = req.user.mobile;
+
+    // Validation
+    if (!color || !amount) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: 'Color and amount required' });
+    }
+
+    if (!['red', 'green'].includes(color.toLowerCase())) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: 'Invalid color' });
+    }
+
+    if (amount < 1) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: 'Minimum bet is ₹1' });
+    }
+
+    // Get user with lock (prevents race conditions)
+    const user = await User.findOne({ mobile }).session(session);
+    if (!user) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check sufficient balance
+    const totalBalance = (user.wallet || 0) + (user.bonus || 0);
+    if (totalBalance < amount) {
+      await session.abortTransaction();
+      return res.status(400).json({ 
+        message: `Insufficient balance. You have ₹${totalBalance.toFixed(2)}` 
+      });
+    }
+
+    // Get current round
+    const currentRound = await Round.findOne().sort({ createdAt: -1 }).session(session);
+    if (!currentRound) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: 'No active round' });
+    }
+
+    const roundId = currentRound.roundId;
+
+    // Check if user already bet in this round
+    const existingBet = await Bet.findOne({ mobile, roundId }).session(session);
+    if (existingBet) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: 'You already placed a bet this round' });
+    }
+
+    // Deduct from wallet/bonus (bonus used first)
+    let deductFromBonus = 0;
+    let deductFromWallet = 0;
+
+    if (user.bonus >= amount) {
+      deductFromBonus = amount;
+    } else {
+      deductFromBonus = user.bonus;
+      deductFromWallet = amount - user.bonus;
+    }
+
+    user.bonus = Math.max(0, user.bonus - deductFromBonus);
+    user.wallet = Math.max(0, user.wallet - deductFromWallet);
+    user.totalWagered = (user.totalWagered || 0) + amount;
+
+    // Round to 2 decimals
+    user.bonus = Math.round(user.bonus * 100) / 100;
+    user.wallet = Math.round(user.wallet * 100) / 100;
+    user.totalWagered = Math.round(user.totalWagered * 100) / 100;
+
+    await user.save({ session });
+
+    // Create bet
+    const newBet = new Bet({
+      mobile,
+      roundId,
+      color: color.toLowerCase(),
+      amount: Math.round(amount * 100) / 100,
+      status: 'PENDING',
+      createdAt: new Date()
+    });
+
+    await newBet.save({ session });
+
+    // Update round pool atomically
+    if (color.toLowerCase() === 'red') {
+      currentRound.redPool = Math.round((currentRound.redPool + amount) * 100) / 100;
+    } else {
+      currentRound.greenPool = Math.round((currentRound.greenPool + amount) * 100) / 100;
+    }
+
+    await currentRound.save({ session });
+
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
+
+    res.json({
+      message: 'Bet placed successfully',
+      bet: {
+        color: newBet.color,
+        amount: newBet.amount,
+        roundId: newBet.roundId
+      },
+      balance: {
+        wallet: user.wallet,
+        bonus: user.bonus,
+        total: user.wallet + user.bonus
+      }
+    });
+
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error('Bet placement error:', err);
+    res.status(500).json({ message: 'Error placing bet. Please try again.' });
+  }
+});
 /* =========================
    ROUND RESOLUTION
 ========================= */
