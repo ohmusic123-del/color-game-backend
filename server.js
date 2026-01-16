@@ -686,7 +686,76 @@ async function resolveRound() {
     startTime: Date.now()
   };
 }
+// Fixed Bet Processing Logic - Add this to your round ending code
 
+async function processRoundEnd(roundId) {
+  try {
+    const round = await Round.findOne({ roundId });
+    if (!round) {
+      console.error('Round not found:', roundId);
+      return;
+    }
+
+    const { redPool, greenPool } = round;
+    
+    // Determine winner (color with LESS total pool)
+    let winner;
+    if (redPool === greenPool) {
+      winner = Math.random() < 0.5 ? 'red' : 'green';
+    } else {
+      winner = redPool < greenPool ? 'red' : 'green';
+    }
+
+    // Update round with winner
+    round.winner = winner;
+    await round.save();
+
+    // Get all bets for this round
+    const bets = await Bet.find({ roundId, status: 'PENDING' });
+
+    console.log(`Processing ${bets.length} bets for round ${roundId}`);
+    console.log(`Winner: ${winner}, Red Pool: ${redPool}, Green Pool: ${greenPool}`);
+
+    // Process each bet
+    for (const bet of bets) {
+      const user = await User.findOne({ mobile: bet.mobile });
+      if (!user) continue;
+
+      if (bet.color === winner) {
+        // WINNER - Pay 1.96x (2x with 2% house edge)
+        const winAmount = Math.round(bet.amount * 2 * 0.98 * 100) / 100;
+        
+        // Credit to wallet
+        user.wallet = Math.round((user.wallet + winAmount) * 100) / 100;
+        
+        bet.status = 'WON';
+        bet.winAmount = winAmount;
+        
+        console.log(`✅ ${user.mobile} won ₹${winAmount} (bet: ₹${bet.amount})`);
+      } else {
+        // LOSER - No payout
+        bet.status = 'LOST';
+        bet.winAmount = 0;
+        
+        console.log(`❌ ${user.mobile} lost ₹${bet.amount}`);
+      }
+
+      await user.save();
+      await bet.save();
+    }
+
+    console.log(`✅ Round ${roundId} processed successfully`);
+
+  } catch (err) {
+    console.error('Error processing round:', err);
+  }
+}
+
+// Call this function when round timer ends
+// Example: After 60 seconds
+setTimeout(() => {
+  processRoundEnd(currentRoundId);
+}, 60000);
 /* =========================
    AUTO ROUND TIMER (60s)
 ========================= */
