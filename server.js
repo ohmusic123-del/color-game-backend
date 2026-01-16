@@ -128,55 +128,95 @@ app.get("/", (req, res) => {
 
 /* ================= REGISTER ================= */
 
-app.post("/register", async (req, res) => {
+// Fixed Registration Endpoint
+app.post('/register', async (req, res) => {
   try {
-    let { mobile, password, referralCode } = req.body;
+    const { mobile, password, referralCode } = req.body;
 
+    // VALIDATION
     if (!mobile || !password) {
-      return res.status(400).json({ error: "Mobile and password required" });
+      return res.status(400).json({ message: 'Mobile and password required' });
     }
 
-    mobile = String(mobile).trim();
-
-    const existingUser = await User.findOne({ mobile });
-    if (existingUser) {
-      return res.status(400).json({ error: "User already exists" });
+    // Validate mobile format (must be exactly 10 digits)
+    if (!/^[0-9]{10}$/.test(mobile)) {
+      return res.status(400).json({ message: 'Invalid mobile number. Must be 10 digits.' });
     }
 
-    // Validate referral code if provided
-    let referredBy = null;
+    // Validate password length
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+
+    // Check if user already exists
+    const existing = await User.findOne({ mobile });
+    if (existing) {
+      return res.status(400).json({ message: 'Mobile number already registered' });
+    }
+
+    // Generate unique referral code
+    const generateReferralCode = () => {
+      return 'BW' + Math.random().toString(36).substring(2, 11).toUpperCase();
+    };
+
+    let uniqueCode = generateReferralCode();
+    let codeExists = await User.findOne({ referralCode: uniqueCode });
+    
+    // Ensure code is unique
+    while (codeExists) {
+      uniqueCode = generateReferralCode();
+      codeExists = await User.findOne({ referralCode: uniqueCode });
+    }
+
+    // Handle referral if provided
+    let referrer = null;
     if (referralCode) {
-      const referrer = await User.findOne({ referralCode: referralCode.trim() });
-      if (referrer) {
-        referredBy = referralCode.trim();
-        // Increment referrer's count
-        referrer.totalReferrals += 1;
-        await referrer.save();
+      referrer = await User.findOne({ referralCode: referralCode.toUpperCase() });
+      if (!referrer) {
+        return res.status(400).json({ message: 'Invalid referral code' });
       }
     }
 
-    const user = new User({
+    // Create new user with bonuses
+    const newUser = new User({
       mobile,
-      password,
-      wallet: 100,
-      bonus: 100,
+      password, // NOTE: Should use bcrypt.hash(password, 10) in production
+      wallet: 100,           // ₹100 registration bonus
+      bonus: 100,            // ₹100 bonus
       deposited: false,
       depositAmount: 0,
       totalWagered: 0,
-      referralCode: generateReferralCode(mobile),
-      referredBy
+      referralCode: uniqueCode,
+      referredBy: referrer ? referrer.referralCode : null,
+      referralEarnings: 0,
+      totalReferrals: 0
     });
 
-    await user.save();
+    await newUser.save();
 
-    res.json({ 
-      message: "Registered successfully",
-      referralCode: user.referralCode
+    // Update referrer's stats
+    if (referrer) {
+      referrer.totalReferrals += 1;
+      await referrer.save();
+    }
+
+    // Generate JWT token
+    const token = jwt.sign({ mobile }, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+    res.status(201).json({
+      message: 'Registration successful',
+      token,
+      user: {
+        mobile: newUser.mobile,
+        wallet: newUser.wallet,
+        bonus: newUser.bonus,
+        referralCode: newUser.referralCode
+      }
     });
 
   } catch (err) {
-    console.error("REGISTER ERROR:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error('Registration error:', err);
+    res.status(500).json({ message: 'Server error during registration' });
   }
 });
 /* =========================
