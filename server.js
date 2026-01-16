@@ -751,28 +751,80 @@ app.post("/withdraw", auth, async (req, res) => {
 /* =========================
    SAVE WITHDRAWAL METHOD
 ========================= */
-app.post("/user/withdrawal-method", auth, async (req, res) => {
+// Add this endpoint to server.js
+
+app.post('/withdraw/method', authMiddleware, async (req, res) => {
   try {
     const { method, details } = req.body;
 
     if (!method || !details) {
-      return res.status(400).json({ error: "Method and details required" });
+      return res.status(400).json({ message: 'Method and details required' });
     }
 
-    const user = await User.findOne({ mobile: req.user.mobile });
+    // Validate method type
+    if (!['upi', 'bank', 'usdt'].includes(method)) {
+      return res.status(400).json({ message: 'Invalid withdrawal method' });
+    }
 
+    // Validate details based on method
+    if (method === 'upi') {
+      if (!details.upiId || !/^[\w.-]+@[\w.-]+$/.test(details.upiId)) {
+        return res.status(400).json({ message: 'Invalid UPI ID format' });
+      }
+    } else if (method === 'bank') {
+      if (!details.accountNumber || !details.ifsc || !details.accountHolder) {
+        return res.status(400).json({ message: 'Bank details incomplete' });
+      }
+      if (!/^[0-9]{9,18}$/.test(details.accountNumber)) {
+        return res.status(400).json({ message: 'Invalid account number' });
+      }
+      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(details.ifsc)) {
+        return res.status(400).json({ message: 'Invalid IFSC code' });
+      }
+    } else if (method === 'usdt') {
+      if (!details.walletAddress || details.walletAddress.length < 26) {
+        return res.status(400).json({ message: 'Invalid USDT wallet address' });
+      }
+    }
+
+    // Update user
+    const user = await User.findOne({ mobile: req.user.mobile });
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return res.status(404).json({ message: 'User not found' });
     }
 
     user.withdrawMethod = method;
     user.withdrawDetails = details;
     await user.save();
 
-    res.json({ message: "Withdrawal method saved successfully" });
+    res.json({
+      message: 'Withdrawal method saved successfully',
+      method: user.withdrawMethod,
+      details: user.withdrawDetails
+    });
+
   } catch (err) {
-    console.error("Save withdrawal method error:", err);
-    res.status(500).json({ error: "Failed to save method" });
+    console.error('Save withdraw method error:', err);
+    res.status(500).json({ message: 'Error saving withdrawal method' });
+  }
+});
+
+// Get withdrawal method
+app.get('/withdraw/method', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      method: user.withdrawMethod,
+      details: user.withdrawDetails
+    });
+
+  } catch (err) {
+    console.error('Get withdraw method error:', err);
+    res.status(500).json({ message: 'Error fetching withdrawal method' });
   }
 });
 /* =========================
