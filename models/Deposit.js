@@ -1,51 +1,40 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
-const depositSchema = new mongoose.Schema(
-    {
-        mobile: {
-            type: String,
-            required: true,
-            index: true
-        },
+const depositSchema = new mongoose.Schema({
+  mobile: {
+    type: String,
+    required: true
+  },
+  amount: {
+    type: Number,
+    required: true,
+    min: 100
+  },
+  method: {
+    type: String,
+    enum: ['upi', 'bank', 'usdt'],
+    default: 'upi'
+  },
+  referenceId: {
+    type: String,
+    default: null
+  },
+  status: {
+    type: String,
+    enum: ['PENDING', 'SUCCESS', 'FAILED'],
+    default: 'PENDING'
+  },
+  adminNote: {
+    type: String,
+    default: null
+  }
+}, {
+  timestamps: true
+});
 
-        amount: {
-            type: Number,
-            required: true,
-            min: 1,
-            get: v => Math.round(v * 100) / 100,
-            set: v => Math.round(v * 100) / 100
-        },
-
-        method: {
-            type: String,
-            enum: ["upi", "bank", "usdt"],
-            required: true
-        },
-
-        // Optional reference details
-        referenceId: {
-            type: String,
-            index: true
-        },
-
-        status: {
-            type: String,
-            enum: ["PENDING", "SUCCESS", "FAILED"],
-            default: "PENDING"
-        },
-
-        adminNote: {
-            type: String,
-            default: ""
-        }
-    },
-    { timestamps: true }
-);
-
-// Indexes for better performance
-depositSchema.index({ mobile: 1, createdAt: -1 });
+// Index for performance
+depositSchema.index({ mobile: 1 });
 depositSchema.index({ status: 1 });
 depositSchema.index({ createdAt: -1 });
-depositSchema.index({ referenceId: 1 });
 
-module.exports = mongoose.model("Deposit", depositSchema);
+module.exports = mongoose.model('Deposit', depositSchema);
