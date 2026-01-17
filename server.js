@@ -1,6 +1,6 @@
 require("dotenv").config();
 const http = require("http");
-const connectDB = require("./db");
+const connectDB = require("./config/db");
 const app = require("./app");
 const { endRoundAndPayout, ensureActiveRound } = require("./services/roundService");
 
