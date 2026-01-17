@@ -48,4 +48,3 @@ depositSchema.index({ status: 1 });
 depositSchema.index({ createdAt: -1 });
 depositSchema.index({ referenceId: 1 });
 
-module.exports = mongoose.model("Deposit", depositSchema);
