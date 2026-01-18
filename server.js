@@ -139,21 +139,20 @@ if (!referrer) {
 return res.status(400).json({ message: 'Invalid referral code' });
 }
 }
-// Create new user with bonuses
+// CREATE NEW USER - FIXED BONUS
 const newUser = new User({
-mobile,
-password, // NOTE: Should use bcrypt.hash(password, 10) in production
-wallet: 100,
-bonus: 100,
-deposited: false,
-depositAmount: 0,
-totalWagered: 0,
-referralCode: uniqueCode,
-referredBy: referrer ? referrer.referralCode : null,
-referralEarnings: 0,
-totalReferrals: 0
+  mobile,
+  password,
+  wallet: 0,        // Changed from 100 to 0
+  bonus: 100,       // Keep 100 bonus
+  deposited: false,
+  depositAmount: 0,
+  totalWagered: 0,
+  referralCode: uniqueCode,
+  referredBy: referrer ? referrer.referralCode : null,
+  referralEarnings: 0,
+  totalReferrals: 0
 });
-await newUser.save();
 // Update referrer's stats
 if (referrer) {
 referrer.totalReferrals += 1;
