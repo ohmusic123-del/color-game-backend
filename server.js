@@ -924,7 +924,7 @@ console.log(`💰 Processing ${bets.length} bets...`);
 for (const bet of bets) {
 const user = await User.findOne({ mobile: bet.mobile });
 if (!user) {
-console.log(`⚠️ User not found: ${bet.mobile}`
+console.log(`⚠️ User not found: ${bet.mobile}`);
 continue;
 }
 if (bet.color === winner) {
