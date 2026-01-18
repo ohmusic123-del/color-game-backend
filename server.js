@@ -20,19 +20,26 @@ MIDDLEWARE
 const auth = require("./middleware/auth");
 /* ---------- Admin Auth ---------- */
 function adminAuth(req, res, next) {
-try {
-const token = req.headers.authorization?.replace("Bearer ", "");
-if (!token) {
-return res.status(401).json({ error: "Admin token missing" });
+  try {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) {
+      return res.status(401).json({ error: "Admin token missing" });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    if (decoded.role !== "admin") {
+      return res.status(403).json({ error: "Admin access denied" });
+    }
+
+    req.admin = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid admin token" });
+  }
 }
-const decoded = jwt.verify(token, process.env.JWT_SECRET);
-if (decoded.role !== "admin") {
-return res.status(403).json({ error: "Admin access denied" });
-}
-req.admin = decoded;
-next();
-} catch {
-return res.status(401).json({ error: "Invalid admin token" }); /* =========================
+
+/* =========================
 PROCESS REFERRAL COMMISSION
 ========================= */
 async function processReferralCommission(userId, amount, type) {
