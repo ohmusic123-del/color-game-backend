@@ -996,17 +996,17 @@ console.error('❌ Round initialization error:', err);
 SERVER START
 ========================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-console.log('\n' + '='.repeat(50));
-console.log('🎮 BIGWIN Backend Server');
-console.log('='.repeat(50));
-console.log(`✅ Server running on port ${PORT}`);
-console.log(`🌐 API URL: http://localhost:${PORT}`);
-console.log(`📊 MongoDB: Connected`);
-console.log(`⏰ Round Duration: 60 seconds`);
-console.log(`💰 House Edge: 2%`);
-console.log(`🎁 Registration Bonus: ₹100 + ₹100`);
-console.log(`🔗 Referral Levels: 6 (22% total)`);
-console.log('='.repeat(50) + '\n');
 
-           })
+app.listen(PORT, () => {
+  console.log('\n' + '='.repeat(50));
+  console.log('🎮 BIGWIN Backend Server');
+  console.log('='.repeat(50));
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`🌐 API URL: http://localhost:${PORT}`);
+  console.log(`📊 MongoDB: Connected`);
+  console.log(`⏰ Round Duration: 60 seconds`);
+  console.log(`💰 House Edge: 2%`);
+  console.log(`🎁 Registration Bonus: ₹100 + ₹100`);
+  console.log(`🔗 Referral Levels: 6 (22% total)`);
+  console.log('='.repeat(50) + '\n');
+});
