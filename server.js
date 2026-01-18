@@ -895,7 +895,8 @@ res.status(500).json({ error: "Server error" });
 /* =========================
 ROUND MANAGEMENT SYSTEM
 ========================= */
-// Fixed Bet Processing Logic async function processRoundEnd(roundId) {
+// Fixed Bet Processing Logic
+async function processRoundEnd(roundId) {
 try {
 console.log(`\n🎮 Processing round ${roundId}...`);
 const round = await Round.findOne({ roundId });
