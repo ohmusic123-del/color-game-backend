@@ -1009,4 +1009,4 @@ console.log(`🎁 Registration Bonus: ₹100 + ₹100`);
 console.log(`🔗 Referral Levels: 6 (22% total)`);
 console.log('='.repeat(50) + '\n');
 
-           });
+           })
