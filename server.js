@@ -450,7 +450,6 @@ app.post("/withdraw", auth, async (req, res) => {
 
     const withdrawAmount = Number(amount);
 
-    // Validation
     if (!withdrawAmount || withdrawAmount < 100) {
       return res.status(400).json({ error: "Minimum withdrawal ₹100" });
     }
@@ -463,7 +462,6 @@ app.post("/withdraw", auth, async (req, res) => {
       return res.status(400).json({ error: "Please make a deposit first" });
     }
 
-    // Check wagering requirement
     const requiredWager = (user.depositAmount || 0) + (user.bonus || 0);
 
     if ((user.totalWagered || 0) < requiredWager) {
@@ -474,14 +472,12 @@ app.post("/withdraw", auth, async (req, res) => {
       });
     }
 
-    // ✅ Check if withdrawal method is set
     if (!user.withdrawMethod || !user.withdrawDetails) {
       return res.status(400).json({
         error: "Please set withdrawal method first",
       });
     }
 
-    // ✅ Create withdrawal request
     const withdrawal = await Withdraw.create({
       mobile: user.mobile,
       amount: withdrawAmount,
@@ -490,7 +486,6 @@ app.post("/withdraw", auth, async (req, res) => {
       status: "PENDING",
     });
 
-    // ✅ Deduct wallet amount
     user.wallet = Math.round((user.wallet - withdrawAmount) * 100) / 100;
     await user.save();
 
@@ -503,38 +498,6 @@ app.post("/withdraw", auth, async (req, res) => {
     console.log("Withdraw Error:", error);
     return res.status(500).json({ message: "Server Error" });
   }
-});
-// Create withdrawal request
-const withdrawal = await Withdraw.create({
-mobile: user.mobile,
-amount,
-method: user.withdrawMethod,
-details: user.withdrawDetails,
-status: "PENDING"
-});
-// Deduct from wallet (held until admin approval)
-user.wallet = Math.round((user.wallet - amount) * 100) / 100;
-await user.save();
-console.log(`✅ Withdrawal requested: ${user.mobile} - ₹${amount}`);
-res.json({
-message: "Withdrawal request submitted",
-newWallet: user.wallet
-});
-} catch (err) {
-console.error("Withdraw error:", err);
-res.status(500).json({ error: "Withdrawal failed" });
-}
-});
-app.get("/wallet/withdraw-history", auth, async (req, res) => {
-try {
-const withdrawals = await Withdraw.find({ mobile: req.user.mobile })
-.sort({ createdAt: -1 })
-.limit(20);
-res.json(withdrawals);
-} catch (err) {
-console.error("Withdraw history error:", err);
-res.status(500).json({ error: "Server error" });
-}
 });
 // FIXED - Save withdrawal method
 app.post('/withdraw/method', auth, async (req, res) => {
@@ -1025,4 +988,4 @@ console.log(`🎁 Registration Bonus: ₹100 + ₹100`);
 console.log(`🔗 Referral Levels: 6 (22% total)`);
 console.log('='.repeat(50) + '\n');
 
-           })
+           });
