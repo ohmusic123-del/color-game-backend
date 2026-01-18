@@ -468,6 +468,10 @@ return res.status(400).json({
 error: "Please set withdrawal method first"
 });
 }
+           catch (error) {
+   console.log("Error:", error);
+   return res.status(500).json({ message: "Server Error" });
+}
 // Create withdrawal request
 const withdrawal = await Withdraw.create({
 mobile: user.mobile,
