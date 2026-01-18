@@ -437,41 +437,73 @@ res.status(500).json({ error: "Server error" });
 }
 });
 /* =========================
-WITHDRAWAL - FIXED
+   WITHDRAWAL - FIXED
 ========================= */
 app.post("/withdraw", auth, async (req, res) => {
-try {
-const { amount } = req.body;
-const user = await User.findOne({ mobile: req.user.mobile });
-if (!user) {
-return res.status(404).json({ error: "User not found" });
-}
-// Validation
-if (!amount || amount < 100) {
-return res.status(400).json({ error: "Minimum withdrawal ₹100" });
-}
-if (amount > user.wallet) {
-return res.status(400).json({ error: "Insufficient balance" });
-}
-if (!user.deposited) {
-return res.status(400).json({ error: "Please make a deposit first" });
-}
-// Check wagering requirement
-const requiredWager = (user.depositAmount || 0) + (user.bonus || 0);
-if (user.totalWagered < requiredWager) {
-return res.status(400).json({
-error: `Complete wagering requirement: ₹${user.totalWagered.toFixed(2)} / ₹${requiredWager.toFixed(2)}`
+  try {
+    const { amount } = req.body;
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const withdrawAmount = Number(amount);
+
+    // Validation
+    if (!withdrawAmount || withdrawAmount < 100) {
+      return res.status(400).json({ error: "Minimum withdrawal ₹100" });
+    }
+
+    if (withdrawAmount > user.wallet) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+
+    if (!user.deposited) {
+      return res.status(400).json({ error: "Please make a deposit first" });
+    }
+
+    // Check wagering requirement
+    const requiredWager = (user.depositAmount || 0) + (user.bonus || 0);
+
+    if ((user.totalWagered || 0) < requiredWager) {
+      return res.status(400).json({
+        error: `Complete wagering requirement: ₹${(user.totalWagered || 0).toFixed(
+          2
+        )} / ₹${requiredWager.toFixed(2)}`,
+      });
+    }
+
+    // ✅ Check if withdrawal method is set
+    if (!user.withdrawMethod || !user.withdrawDetails) {
+      return res.status(400).json({
+        error: "Please set withdrawal method first",
+      });
+    }
+
+    // ✅ Create withdrawal request
+    const withdrawal = await Withdraw.create({
+      mobile: user.mobile,
+      amount: withdrawAmount,
+      method: user.withdrawMethod,
+      details: user.withdrawDetails,
+      status: "PENDING",
+    });
+
+    // ✅ Deduct wallet amount
+    user.wallet = Math.round((user.wallet - withdrawAmount) * 100) / 100;
+    await user.save();
+
+    return res.status(200).json({
+      message: "Withdrawal request submitted successfully",
+      withdrawal,
+      wallet: user.wallet,
+    });
+  } catch (error) {
+    console.log("Withdraw Error:", error);
+    return res.status(500).json({ message: "Server Error" });
+  }
 });
-}
-// Check if withdrawal method is set if (!user.withdrawMethod || !user.withdrawDetails) {
-return res.status(400).json({
-error: "Please set withdrawal method first"
-});
-}
-           catch (error) {
-   console.log("Error:", error);
-   return res.status(500).json({ message: "Server Error" });
-}
 // Create withdrawal request
 const withdrawal = await Withdraw.create({
 mobile: user.mobile,
