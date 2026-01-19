@@ -699,6 +699,45 @@ app.get("/referral/info", auth, async (req, res) => {
     return res.status(500).json({ message: 'Error fetching referral data' });
   }
 });
+/* =========================
+   ADMIN LOGIN
+========================= */
+app.post("/admin/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // HARDCODED ADMIN CREDENTIALS (Change these!)
+    const ADMIN_USERNAME = "admin";
+    const ADMIN_PASSWORD = "admin123";
+
+    if (!username || !password) {
+      return res.status(400).json({ error: "Username and password required" });
+    }
+
+    // Check credentials
+    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+      // Generate admin token
+      const token = jwt.sign(
+        { username: username, role: "admin" },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      console.log('✅ Admin logged in:', username);
+
+      return res.json({
+        message: "Admin login successful",
+        token: `Bearer ${token}`
+      });
+    } else {
+      return res.status(401).json({ error: "Invalid admin credentials" });
+    }
+
+  } catch (err) {
+    console.error('Admin login error:', err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
 app.get("/admin/stats", adminAuth, async (req, res) => {
 try {
 const totalUsers = await User.countDocuments();
