@@ -93,9 +93,75 @@ console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
 next();
 });
 
-app.post("/api/cashfree/webhook", (req, res) => {
-  console.log("✅ Cashfree Webhook Received:", req.body);
-  return res.status(200).send("OK");
+app.post("/api/cashfree/webhook", async (req, res) => {
+  try {
+    console.log("✅ Cashfree Webhook Received:", JSON.stringify(req.body));
+
+    const eventData = req.body?.data;
+
+    const orderId = eventData?.order?.order_id;
+    const paymentStatus = eventData?.payment?.payment_status; // SUCCESS / FAILED
+    const paidAmount = Number(eventData?.order?.order_amount || 0);
+
+    if (!orderId) {
+      return res.status(400).send("Missing order_id");
+    }
+
+    // Find deposit created during create-order
+    const deposit = await Deposit.findOne({ referenceId: orderId });
+
+    if (!deposit) {
+      console.log("⚠️ Deposit not found for order:", orderId);
+      return res.status(200).send("OK");
+    }
+
+    // ✅ If already processed, skip
+    if (deposit.status === "SUCCESS") {
+      return res.status(200).send("OK");
+    }
+
+    // ✅ Only on SUCCESS
+    if (paymentStatus === "SUCCESS") {
+      const user = await User.findOne({ mobile: deposit.mobile });
+      if (!user) {
+        console.log("⚠️ User not found:", deposit.mobile);
+        return res.status(200).send("OK");
+      }
+
+      // Mark deposit success
+      deposit.status = "SUCCESS";
+      await deposit.save();
+
+      // Add money to wallet
+      const amountToAdd = paidAmount || deposit.amount;
+
+      user.wallet = Math.round((user.wallet + amountToAdd) * 100) / 100;
+      user.deposited = true;
+      user.depositAmount = Math.round(((user.depositAmount || 0) + amountToAdd) * 100) / 100;
+
+      // ✅ First deposit bonus (100%)
+      const isFirstDeposit = user.depositAmount === amountToAdd;
+      if (isFirstDeposit) {
+        user.bonus = Math.round(((user.bonus || 0) + amountToAdd) * 100) / 100;
+      }
+
+      await user.save();
+
+      // Referral commission
+      await processReferralCommission(user.mobile, amountToAdd, "DEPOSIT");
+
+      console.log(`✅ Cashfree Deposit SUCCESS: ${user.mobile} +₹${amountToAdd}`);
+    } else {
+      deposit.status = "FAILED";
+      await deposit.save();
+      console.log(`❌ Cashfree Deposit FAILED: ${orderId}`);
+    }
+
+    return res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ Cashfree webhook error:", err);
+    return res.status(200).send("OK");
+  }
 });
 
 app.post("/api/cashfree/create-order", auth, async (req, res) => {
