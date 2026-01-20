@@ -12,7 +12,7 @@ const depositSchema = new mongoose.Schema({
   },
   method: {
     type: String,
-    enum: ['upi', 'bank', 'usdt'],
+    enum: ['upi', 'bank', 'usdt','cashfree'],
     default: 'upi'
   },
   referenceId: {
