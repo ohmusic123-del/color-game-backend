@@ -204,14 +204,17 @@ app.post("/api/cashfree/create-order", auth, async (req, res) => {
       payment_session_id: response.data.payment_session_id,
     });
   } catch (err) {
-    console.error("Cashfree create order error:", {
-  message: err.message,
-  status: err.response?.status,
-  data: err.response?.data,
-  stack: err.stack,
-});
-    return res.status(500).json({ message: "Cashfree order create failed" });
-  }
+  console.log("========== CASHFREE ERROR ==========");
+  console.log("Message:", err?.message);
+  console.log("Status:", err?.response?.status);
+  console.log("Data:", err?.response?.data);
+  console.log("Full Error:", err);
+  console.log("===================================");
+  return res.status(500).json({
+    message: "Cashfree order create failed",
+    error: err?.response?.data || err?.message || "Unknown error"
+  });
+}
 });
 /* =========================
 ROUND STATE ========================= */
