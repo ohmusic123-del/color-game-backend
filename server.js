@@ -97,6 +97,51 @@ app.post("/api/cashfree/webhook", (req, res) => {
   console.log("✅ Cashfree Webhook Received:", req.body);
   return res.status(200).send("OK");
 });
+
+app.post("/api/cashfree/create-order", auth, async (req, res) => {
+  try {
+    const { amount } = req.body;
+
+    if (!amount || Number(amount) < 10) {
+      return res.status(400).json({ message: "Minimum deposit ₹10" });
+    }
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const orderId = `ORDER_${Date.now()}`;
+
+    const request = {
+      order_amount: Number(amount),
+      order_currency: "INR",
+      order_id: orderId,
+      customer_details: {
+        customer_id: user.mobile,
+        customer_phone: user.mobile,
+        customer_email: user.email || "user@gmail.com",
+      },
+    };
+
+    const response = await Cashfree.PGCreateOrder("2023-08-01", request);
+
+    // ✅ Save deposit as PENDING (DO NOT add money yet)
+    await Deposit.create({
+      mobile: user.mobile,
+      amount: Number(amount),
+      method: "cashfree",
+      referenceId: orderId,
+      status: "PENDING",
+    });
+
+    return res.json({
+      orderId,
+      payment_session_id: response.data.payment_session_id,
+    });
+  } catch (err) {
+    console.error("Cashfree create order error:", err.response?.data || err);
+    return res.status(500).json({ message: "Cashfree order create failed" });
+  }
+});
 /* =========================
 ROUND STATE ========================= */
 let CURRENT_ROUND = {
