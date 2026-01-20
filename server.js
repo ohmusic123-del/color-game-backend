@@ -5,6 +5,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const app = express();
+const { Cashfree } = require("cashfree-pg");
 /* =========================
 MODELS
 ========================= */
@@ -39,6 +40,12 @@ function adminAuth(req, res, next) {
   }
 }
 
+Cashfree.XClientId = process.env.CASHFREE_APP_ID;
+Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
+Cashfree.XEnvironment =
+  process.env.CASHFREE_ENV === "PROD"
+    ? Cashfree.Environment.PRODUCTION
+    : Cashfree.Environment.SANDBOX;
 /* =========================
 PROCESS REFERRAL COMMISSION
 ========================= */
