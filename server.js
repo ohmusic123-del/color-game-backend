@@ -92,7 +92,16 @@ app.use((req, res, next) => {
 console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
 next();
 });
+app.post(
+  "/api/cashfree/webhook",
+  express.raw({ type: "*/*" }),
+  async (req, res) => {
+    console.log("✅ CASHFREE WEBHOOK HIT");
+    console.log(req.body.toString());
 
+    return res.status(200).send("OK");
+  }
+);
 app.post("/api/cashfree/webhook", async (req, res) => {
   try {
     console.log("✅ Cashfree Webhook Received:", JSON.stringify(req.body));
