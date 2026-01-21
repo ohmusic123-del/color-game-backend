@@ -16,16 +16,6 @@ const userSchema = new mongoose.Schema({
     type: String, 
     required: true 
   },
-  isMobileVerified: {
-  type: Boolean,
-  default: false
-},
-otp: {
-  type: String
-},
-otpExpiresAt: {
-  type: Date
-},
   // Wallet & Bonus - Use Number with precision control
   wallet: { 
     type: Number, 
