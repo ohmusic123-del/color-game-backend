@@ -1137,9 +1137,15 @@ if (!user) {
 console.log(`⚠️ User not found: ${bet.mobile}`);
 continue;
 }
-if (bet.color === winner) {
-// WINNER - Pay 1.96x (2x with 2% house edge)
-const winAmount = Math.round(bet.amount * 2 * 0.98 * 100) / 100;
+for (const bet of bets) {
+  if (bet.color === winningColor) {
+    bet.status = "WON";                    // ✅ ADD
+  } else {
+    bet.status = "LOST";                   // ✅ ADD
+  }
+
+  await bet.save();                        // ✅ REQUIRED
+}
 // Credit to wallet
 user.wallet = Math.round((user.wallet + winAmount) * 100) / 100;
 bet.status = 'WON';
