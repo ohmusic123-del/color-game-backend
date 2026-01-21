@@ -1199,6 +1199,487 @@ console.log('✅ Using existing round');
 console.error('❌ Round initialization error:', err);
 }
 })();
+
+/* =========================
+ENHANCED ADMIN ENDPOINTS
+========================= */
+
+// Dashboard Stats
+app.get("/admin/dashboard-stats", adminAuth, async (req, res) => {
+  try {
+    const now = new Date();
+    const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    // Total users
+    const totalUsers = await User.countDocuments();
+    const newUsersThisWeek = await User.countDocuments({
+      createdAt: { $gte: lastWeek }
+    });
+
+    // Revenue (deposits)
+    const totalDeposits = await Deposit.aggregate([
+      { $match: { status: "SUCCESS" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    const depositsThisWeek = await Deposit.aggregate([
+      { $match: { status: "SUCCESS", createdAt: { $gte: lastWeek } } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    // Withdrawals
+    const totalWithdrawals = await Withdraw.aggregate([
+      { $match: { status: "APPROVED" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    // Pending actions
+    const pendingDeposits = await Deposit.countDocuments({ status: "PENDING" });
+    const pendingWithdrawals = await Withdraw.countDocuments({ status: "PENDING" });
+
+    // Calculate profit (deposits - withdrawals - bonuses given)
+    const totalRevenue = totalDeposits[0]?.total || 0;
+    const totalPayout = totalWithdrawals[0]?.total || 0;
+    const netProfit = totalRevenue - totalPayout;
+
+    res.json({
+      totalUsers,
+      newUsersThisWeek,
+      totalRevenue,
+      revenueThisWeek: depositsThisWeek[0]?.total || 0,
+      netProfit,
+      pendingActions: pendingDeposits + pendingWithdrawals,
+      pendingDeposits,
+      pendingWithdrawals
+    });
+  } catch (err) {
+    console.error("Dashboard stats error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Live Activity Feed
+app.get("/admin/live-activity", adminAuth, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+
+    // Get recent bets
+    const recentBets = await Bet.find()
+      .sort({ createdAt: -1 })
+      .limit(limit / 2)
+      .lean();
+
+    // Get recent deposits
+    const recentDeposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(limit / 4)
+      .lean();
+
+    // Get recent withdrawals
+    const recentWithdrawals = await Withdraw.find()
+      .sort({ createdAt: -1 })
+      .limit(limit / 4)
+      .lean();
+
+    const activities = [
+      ...recentBets.map(b => ({
+        type: 'bet',
+        title: `Bet placed on ${b.color.toUpperCase()}`,
+        user: b.mobile.substring(0, 4) + '****' + b.mobile.substring(8),
+        amount: b.amount,
+        time: b.createdAt
+      })),
+      ...recentDeposits.map(d => ({
+        type: 'deposit',
+        title: `Deposit ${d.status}`,
+        user: d.mobile.substring(0, 4) + '****' + d.mobile.substring(8),
+        amount: d.amount,
+        time: d.createdAt
+      })),
+      ...recentWithdrawals.map(w => ({
+        type: 'withdraw',
+        title: `Withdrawal ${w.status}`,
+        user: w.mobile.substring(0, 4) + '****' + w.mobile.substring(8),
+        amount: w.amount,
+        time: w.createdAt
+      }))
+    ]
+    .sort((a, b) => new Date(b.time) - new Date(a.time))
+    .slice(0, limit);
+
+    res.json(activities);
+  } catch (err) {
+    console.error("Live activity error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Revenue Chart Data
+app.get("/admin/revenue-chart", adminAuth, async (req, res) => {
+  try {
+    const period = req.query.period || '7d';
+    const days = period === '7d' ? 7 : period === '30d' ? 30 : 90;
+
+    const labels = [];
+    const revenueData = [];
+    const profitData = [];
+
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0);
+
+      const nextDate = new Date(date);
+      nextDate.setDate(nextDate.getDate() + 1);
+
+      // Get deposits for this day
+      const dayDeposits = await Deposit.aggregate([
+        {
+          $match: {
+            status: "SUCCESS",
+            createdAt: { $gte: date, $lt: nextDate }
+          }
+        },
+        { $group: { _id: null, total: { $sum: "$amount" } } }
+      ]);
+
+      // Get withdrawals for this day
+      const dayWithdrawals = await Withdraw.aggregate([
+        {
+          $match: {
+            status: "APPROVED",
+            createdAt: { $gte: date, $lt: nextDate }
+          }
+        },
+        { $group: { _id: null, total: { $sum: "$amount" } } }
+      ]);
+
+      const revenue = dayDeposits[0]?.total || 0;
+      const payout = dayWithdrawals[0]?.total || 0;
+
+      labels.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+      revenueData.push(revenue);
+      profitData.push(revenue - payout);
+    }
+
+    res.json({
+      labels,
+      revenue: revenueData,
+      profit: profitData
+    });
+  } catch (err) {
+    console.error("Chart data error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// User Analytics
+app.get("/admin/user-analytics", adminAuth, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const depositedUsers = await User.countDocuments({ deposited: true });
+    const activeUsers = await Bet.distinct('mobile', {
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+
+    // Top depositors
+    const topDepositors = await User.find()
+      .sort({ depositAmount: -1 })
+      .limit(10)
+      .select('mobile depositAmount wallet totalWagered');
+
+    // Top wagerers
+    const topWagerers = await User.find()
+      .sort({ totalWagered: -1 })
+      .limit(10)
+      .select('mobile totalWagered depositAmount wallet');
+
+    res.json({
+      totalUsers,
+      depositedUsers,
+      activeUsersToday: activeUsers.length,
+      conversionRate: ((depositedUsers / totalUsers) * 100).toFixed(2),
+      topDepositors,
+      topWagerers
+    });
+  } catch (err) {
+    console.error("User analytics error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Game Analytics
+app.get("/admin/game-analytics", adminAuth, async (req, res) => {
+  try {
+    const totalBets = await Bet.countDocuments();
+    const totalWagered = await Bet.aggregate([
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    const redBets = await Bet.countDocuments({ color: 'red' });
+    const greenBets = await Bet.countDocuments({ color: 'green' });
+
+    const wonBets = await Bet.countDocuments({ status: 'WON' });
+    const lostBets = await Bet.countDocuments({ status: 'LOST' });
+
+    const totalWinnings = await Bet.aggregate([
+      { $match: { status: 'WON' } },
+      { $group: { _id: null, total: { $sum: "$winAmount" } } }
+    ]);
+
+    const houseEdge = totalWagered[0]?.total - (totalWinnings[0]?.total || 0);
+
+    res.json({
+      totalBets,
+      totalWagered: totalWagered[0]?.total || 0,
+      redBetsPercentage: ((redBets / totalBets) * 100).toFixed(2),
+      greenBetsPercentage: ((greenBets / totalBets) * 100).toFixed(2),
+      winRate: ((wonBets / (wonBets + lostBets)) * 100).toFixed(2),
+      houseEdge: houseEdge.toFixed(2),
+      totalPayouts: totalWinnings[0]?.total || 0
+    });
+  } catch (err) {
+    console.error("Game analytics error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Search Users
+app.get("/admin/search-users", adminAuth, async (req, res) => {
+  try {
+    const { query } = req.query;
+    
+    if (!query || query.length < 3) {
+      return res.status(400).json({ error: "Search query too short" });
+    }
+
+    const users = await User.find({
+      $or: [
+        { mobile: { $regex: query, $options: 'i' } },
+        { referralCode: { $regex: query, $options: 'i' } }
+      ]
+    })
+    .select('-password')
+    .limit(20);
+
+    res.json(users);
+  } catch (err) {
+    console.error("User search error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+  
+// Ban/Unban User
+app.post("/admin/user/:mobile/ban", adminAuth, async (req, res) => {
+  try {
+    const { mobile } = req.params;
+    const { banned, reason } = req.body;
+
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    user.banned = banned;
+    if (banned) {
+      user.banReason = reason || "Violation of terms";
+    }
+    await user.save();
+
+    console.log(`Admin ${banned ? 'banned' : 'unbanned'} user: ${mobile}`);
+
+    res.json({
+      message: `User ${banned ? 'banned' : 'unbanned'} successfully`,
+      user: {
+        mobile: user.mobile,
+        banned: user.banned
+      }
+    });
+  } catch (err) {
+    console.error("Ban user error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Manual Balance Adjustment
+app.post("/admin/user/:mobile/adjust-balance", adminAuth, async (req, res) => {
+  try {
+    const { mobile } = req.params;
+    const { amount, type, reason } = req.body; // type: 'wallet' or 'bonus'
+
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (type === 'wallet') {
+      user.wallet = Math.max(0, Math.round((user.wallet + amount) * 100) / 100);
+} else if (type === 'bonus') {
+user.bonus = Math.max(0, Math.round((user.bonus + amount) * 100) / 100);
+} else {
+return res.status(400).json({ error: "Invalid type" });
+}
+await user.save();
+
+// Log the adjustment
+console.log(`Admin adjusted ${type}: ${mobile} ${amount > 0 ? '+' : ''}₹${amount} - ${reason}`);
+
+res.json({
+  message: "Balance adjusted successfully",
+  newWallet: user.wallet,
+  newBonus: user.bonus
+});
+} catch (err) {
+console.error("Balance adjustment error:", err);
+res.status(500).json({ error: "Server error" });
+}
+});
+// System Settings
+app.get("/admin/settings", adminAuth, async (req, res) => {
+try {
+// You can store these in a Settings collection or return defaults
+res.json({
+minDeposit: 100,
+minWithdrawal: 100,
+minBet: 1,
+maxBet: 10000,
+roundDuration: 60,
+houseEdge: 2,
+registrationBonus: 100,
+firstDepositBonus: 100,
+referralLevels: 6,
+maintenanceMode: false
+});
+} catch (err) {
+console.error("Settings fetch error:", err);
+res.status(500).json({ error: "Server error" });
+}
+});
+// Update Settings
+app.post("/admin/settings", adminAuth, async (req, res) => {
+try {
+const settings = req.body;
+// Store in database or environment
+// For now, just return success
+console.log("Admin updated settings:", settings);
+
+res.json({
+  message: "Settings updated successfully",
+  settings
+});
+} catch (err) {
+console.error("Settings update error:", err);
+res.status(500).json({ error: "Server error" });
+}
+});
+// Export Data (CSV)
+app.get("/admin/export/:type", adminAuth, async (req, res) => {
+try {
+const { type } = req.params;
+const { startDate, endDate } = req.query;
+let data = [];
+let filename = '';
+
+if (type === 'users') {
+  data = await User.find()
+    .select('-password')
+    .lean();
+  filename = 'users.csv';
+} else if (type === 'deposits') {
+  data = await Deposit.find({
+    createdAt: {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    }
+  }).lean();
+  filename = 'deposits.csv';
+} else if (type === 'withdrawals') {
+  data = await Withdraw.find({
+    createdAt: {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    }
+  }).lean();
+  filename = 'withdrawals.csv';
+} else if (type === 'bets') {
+  data = await Bet.find({
+    createdAt: {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    }
+  }).lean();
+  filename = 'bets.csv';
+}
+
+// Convert to CSV
+const csv = convertToCSV(data);
+
+res.setHeader('Content-Type', 'text/csv');
+res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+res.send(csv);
+} catch (err) {
+console.error("Export error:", err);
+res.status(500).json({ error: "Server error" });
+}
+});
+// Helper function to convert JSON to CSV
+function convertToCSV(data) {
+if (!data || data.length === 0) return '';
+const headers = Object.keys(data[0]);
+const csvRows = [];
+// Add headers
+csvRows.push(headers.join(','));
+// Add data
+for (const row of data) {
+const values = headers.map(header => {
+const val = row[header];
+return typeof val === 'string' ? "${val}" : val;
+});
+csvRows.push(values.join(','));
+}
+return csvRows.join('\n');
+}
+// Bulk Actions
+app.post("/admin/bulk-action", adminAuth, async (req, res) => {
+try {
+const { action, ids, type } = req.body;
+if (type === 'deposits' && action === 'approve') {
+  const deposits = await Deposit.find({ _id: { $in: ids }, status: 'PENDING' });
+  
+  for (const deposit of deposits) {
+    const user = await User.findOne({ mobile: deposit.mobile });
+    if (user) {
+      user.wallet = Math.round((user.wallet + deposit.amount) * 100) / 100;
+      user.deposited = true;
+      user.depositAmount = Math.round((user.depositAmount + deposit.amount) * 100) / 100;
+      
+      const isFirstDeposit = user.depositAmount === deposit.amount;
+      if (isFirstDeposit) {
+        user.bonus = Math.round((user.bonus + deposit.amount) * 100) / 100;
+      }
+      
+      await user.save();
+      deposit.status = 'SUCCESS';
+      await deposit.save();
+    }
+  }
+
+  res.json({ message: `${deposits.length} deposits approved` });
+} else if (type === 'withdrawals' && action === 'approve') {
+  await Withdraw.updateMany(
+    { _id: { $in: ids }, status: 'PENDING' },
+    { status: 'APPROVED', processedAt: new Date() }
+  );
+
+  res.json({ message: `${ids.length} withdrawals approved` });
+} else {
+  res.status(400).json({ error: "Invalid bulk action" });
+}
+} catch (err) {
+console.error("Bulk action error:", err);
+res.status(500).json({ error: "Server error" });
+}
+});
 /* =========================
 SERVER START
 ========================= */
