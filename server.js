@@ -596,9 +596,10 @@ const totalPool = redPool + greenPool;
     console.log(`🏆 WINNER: ${winner.toUpperCase()}`);
 
     // Save winner to round
-   updated.winner = winner;
+updated.winner = winner;
+updated.status = 'CLOSED';
 await updated.save({ session });
-
+    
     // Get all pending bets for this round
     const bets = await Bet.find({ 
       roundId, 
@@ -611,6 +612,11 @@ if (bets.length === 0) {
 
   await session.commitTransaction();
   session.endSession();
+  // ✅ Create next round ONLY after closing current one
+await Round.create({
+  roundId: generateRoundId(),
+  status: 'OPEN'
+});
 
   console.log(`✅ Round ${roundId} completed (no bets)`);
   return;
@@ -745,9 +751,9 @@ remaining: Math.max(0, 60 - elapsed)
 });
 }); app.get("/rounds/history", async (req, res) => {
 try {
-const rounds = await Round.find()
-.sort({ createdAt: -1 })
-.limit(20)
+const rounds = await Round.find({ status: 'CLOSED' })
+  .sort({ createdAt: -1 })
+  .limit(20);
 .select("roundId winner redPool greenPool createdAt");
 res.json(rounds);
 } catch (err) {
