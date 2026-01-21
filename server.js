@@ -215,6 +215,49 @@ app.post("/api/cashfree/create-order", auth, async (req, res) => {
   });
 }
 });
+
+// 🔧 FIX OLD PENDING BETS (when server restarts)
+async function fixPendingBets() {
+  try {
+    console.log("🔧 Checking old pending bets...");
+
+    // Get all rounds which already have a winner
+    const rounds = await Round.find({ winner: { $ne: null } });
+
+    for (const round of rounds) {
+      const pendingBets = await Bet.find({
+        roundId: round.roundId,
+        status: "PENDING"
+      });
+
+      if (pendingBets.length === 0) continue;
+
+      console.log(`🔧 Fixing ${pendingBets.length} bets for round ${round.roundId}`);
+
+      for (const bet of pendingBets) {
+        const user = await User.findOne({ mobile: bet.mobile });
+        if (!user) continue;
+
+        if (bet.color === round.winner) {
+          const winAmount = Math.round(bet.amount * 2 * 0.98 * 100) / 100;
+          user.wallet = Math.round((user.wallet + winAmount) * 100) / 100;
+          bet.status = "WON";
+          bet.winAmount = winAmount;
+        } else {
+          bet.status = "LOST";
+          bet.winAmount = 0;
+        }
+
+        await user.save();
+        await bet.save();
+      }
+    }
+
+    console.log("✅ Old pending bets fixed");
+  } catch (err) {
+    console.error("❌ fixPendingBets error:", err);
+  }
+}
 /* =========================
 ROUND STATE ========================= */
 let CURRENT_ROUND = {
