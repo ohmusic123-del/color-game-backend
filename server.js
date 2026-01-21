@@ -187,7 +187,7 @@ app.post("/api/cashfree/create-order", auth, async (req, res) => {
       },
     };
 
-    const response = await Cashfree.PGCreateOrder("2023-08-01", request);
+  const response = await Cashfree.PGCreateOrder("2023-08-01", request);
 
     // ✅ Save deposit as PENDING (DO NOT add money yet)
     await Deposit.create({
@@ -444,8 +444,8 @@ if (!user) {
 await session.abortTransaction();
 session.endSession();
 return res.status(404).json({ error: "User not found" });
-}
-// Check balance
+      }
+         // Check balance
 const totalBalance = (user.wallet || 0) + (user.bonus || 0);
 if (totalBalance < amount) {
 await session.abortTransaction();
@@ -810,8 +810,7 @@ app.get("/referral/info", auth, async (req, res) => {
     commissions.forEach(comm => {
       levelBreakdown[`level${comm.level}`].earnings += comm.commission;
     });
-
-    // ✅ SEND RESPONSE ONLY ONCE
+      // ✅ SEND RESPONSE ONLY ONCE
     return res.json({
       referralCode: user.referralCode,
       totalReferrals: user.totalReferrals || directReferrals.length,
@@ -1120,10 +1119,7 @@ winner = Math.random() < 0.5 ? 'red' : 'green';
 winner = redPool < greenPool ? 'red' : 'green';
 }
 // Update round with winner
-round.winner = winningColor;
-round.status = "COMPLETED";      // ✅ ADD THIS
-round.endedAt = new Date();      // ✅ ADD THIS (important)
-
+round.winner = winner;
 await round.save();
 console.log(`📊 Pools - Red: ₹${redPool}, Green: ₹${greenPool}`);
 console.log(`🏆 Winner: ${winner.toUpperCase()}`);
@@ -1137,15 +1133,9 @@ if (!user) {
 console.log(`⚠️ User not found: ${bet.mobile}`);
 continue;
 }
-for (const bet of bets) {
-  if (bet.color === winningColor) {
-    bet.status = "WON";                    // ✅ ADD
-  } else {
-    bet.status = "LOST";                   // ✅ ADD
-  }
-
-  await bet.save();                        // ✅ REQUIRED
-}
+if (bet.color === winner) {
+// WINNER - Pay 1.96x (2x with 2% house edge)
+const winAmount = Math.round(bet.amount * 2 * 0.98 * 100) / 100;
 // Credit to wallet
 user.wallet = Math.round((user.wallet + winAmount) * 100) / 100;
 bet.status = 'WON';
@@ -1352,7 +1342,7 @@ app.get("/admin/revenue-chart", adminAuth, async (req, res) => {
         { $group: { _id: null, total: { $sum: "$amount" } } }
       ]);
 
-      // Get withdrawals for this day
+            // Get withdrawals for this day
       const dayWithdrawals = await Withdraw.aggregate([
         {
           $match: {
