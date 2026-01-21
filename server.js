@@ -468,7 +468,7 @@ app.post("/bet", auth, async (req, res) => {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
-        error: Already placed bet in this round: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}
+        error: 'Already placed bet in this round: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}
       });
     }
 
