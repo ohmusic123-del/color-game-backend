@@ -749,17 +749,19 @@ res.json({
 elapsed,
 remaining: Math.max(0, 60 - elapsed)
 });
-}); app.get("/rounds/history", async (req, res) => {
-try {
-const rounds = await Round.find({ status: 'CLOSED' })
-  .sort({ createdAt: -1 })
-  .limit(20);
-.select("roundId winner redPool greenPool createdAt");
-res.json(rounds);
-} catch (err) {
-console.error("Rounds history error:", err);
-res.status(500).json({ error: "Failed to load rounds" });
-}
+});
+app.get('/round-history', async (req, res) => {
+  try {
+    const rounds = await Round.find({ status: 'CLOSED' })
+      .select('roundId winner redPool greenPool createdAt')
+      .sort({ createdAt: -1 })
+      .limit(20);
+
+    res.json(rounds);
+  } catch (err) {
+    console.error('Round history error:', err);
+    res.status(500).json({ error: 'Failed to fetch round history' });
+  }
 });
 /* =========================
 DEPOSIT
