@@ -468,19 +468,19 @@ app.post("/bet", auth, async (req, res) => {
       await session.abortTransaction();
       session.endSession();
 return res.status(400).json({
-  error: `Already placed bet in this round: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}`
+  error: `Already placed bet in this round: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}`  // ✅ FIXED
 });
     }
 
     // Check balance
-    const totalBalance = (user.wallet || 0) + (user.bonus || 0);
-    if (totalBalance < betAmount) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        error: Insufficient balance. Available: ₹${totalBalance.toFixed(2)}
-      });
-    }
+const totalBalance = (user.wallet || 0) + (user.bonus || 0);
+if (totalBalance < betAmount) {
+  await session.abortTransaction();
+  session.endSession();
+  return res.status(400).json({
+    error: `Insufficient balance. Available: ₹${totalBalance.toFixed(2)}`  // ✅ FIXED - Added backtick
+  });
+}
 
     // Deduct from bonus first, then wallet
     let deductFromBonus = Math.min(user.bonus, betAmount);
