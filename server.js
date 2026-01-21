@@ -612,12 +612,28 @@ if (bets.length === 0) {
 
   await session.commitTransaction();
   session.endSession();
-  // ✅ Create next round ONLY after closing current one
-await Round.create({
-  roundId: generateRoundId(),
-  status: 'OPEN'
-});
+setInterval(async () => {
+  const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
 
+  if (elapsed >= 60) {
+    await processRoundEnd(CURRENT_ROUND.id);
+
+    CURRENT_ROUND = {
+      id: Date.now().toString(),
+      startTime: Date.now()
+    };
+
+    await Round.create({
+      roundId: CURRENT_ROUND.id,
+      redPool: 0,
+      greenPool: 0,
+      winner: null,
+      status: 'OPEN'
+    });
+
+    console.log(`🆕 NEW ROUND STARTED: ${CURRENT_ROUND.id}`);
+  }
+}, 1000);
   console.log(`✅ Round ${roundId} completed (no bets)`);
   return;
 }
