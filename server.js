@@ -414,104 +414,322 @@ console.error("Current bets error:", err);
 res.status(500).json({ error: "Failed to load current bets" });
 }
 });
-// FIXED BET ENDPOINT - Prevents freezing with concurrent users
+
+/* =========================
+FIXED BET ENDPOINT
+========================= */
 app.post("/bet", auth, async (req, res) => {
-const session = await mongoose.startSession();
-session.startTransaction();
-try {
-// Check round timing
-const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
-if (elapsed >= 60) {
-await session.abortTransaction();
-session.endSession();
-return res.status(400).json({ error: "Round closed" });
-} const { color, amount } = req.body;
-const mobile = req.user.mobile;
-// Validation
-if (!color || !['red', 'green'].includes(color.toLowerCase())) {
-await session.abortTransaction();
-session.endSession();
-return res.status(400).json({ error: "Invalid color" });
-}
-if (!amount || amount < 1) {
-await session.abortTransaction();
-session.endSession();
-return res.status(400).json({ error: "Minimum bet ₹1" });
-}
-// Get user with session lock
-const user = await User.findOne({ mobile }).session(session);
-if (!user) {
-await session.abortTransaction();
-session.endSession();
-return res.status(404).json({ error: "User not found" });
+  const session = await mongoose.startSession();
+  
+  try {
+    await session.startTransaction();
+
+    // Check round timing
+    const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+    if (elapsed >= 57) { // Close betting 3 seconds before end
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Round closed for betting" });
+    }
+
+    const { color, amount } = req.body;
+    
+    // Validation
+    if (!color || !['red', 'green'].includes(color.toLowerCase())) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Invalid color. Choose red or green." });
+    }
+    
+    if (!amount || amount < 1) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Minimum bet ₹1" });
+    }
+
+    const betAmount = Math.round(amount * 100) / 100;
+
+    // Get user with lock
+    const user = await User.findOne({ mobile: req.user.mobile }).session(session);
+    
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check if user already bet in this round
+    const existingBet = await Bet.findOne({
+      mobile: req.user.mobile,
+      roundId: CURRENT_ROUND.id
+    }).session(session);
+
+    if (existingBet) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: Already placed bet in this round: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}
+      });
+    }
+
+    // Check balance
+    const totalBalance = (user.wallet || 0) + (user.bonus || 0);
+    if (totalBalance < betAmount) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: Insufficient balance. Available: ₹${totalBalance.toFixed(2)}
+      });
+    }
+
+    // Deduct from bonus first, then wallet
+    let deductFromBonus = Math.min(user.bonus, betAmount);
+    let deductFromWallet = betAmount - deductFromBonus;
+
+    user.bonus = Math.round((user.bonus - deductFromBonus) * 100) / 100;
+    user.wallet = Math.round((user.wallet - deductFromWallet) * 100) / 100;
+    user.totalWagered = Math.round(((user.totalWagered || 0) + betAmount) * 100) / 100;
+
+    await user.save({ session });
+
+    // Create bet
+    const newBet = await Bet.create([{
+      mobile: req.user.mobile,
+      roundId: CURRENT_ROUND.id,
+      color: color.toLowerCase(),
+      amount: betAmount,
+      status: 'PENDING',
+      createdAt: new Date()
+    }], { session });
+
+    // ✅ FIX: Update round pools atomically
+    const updateField = color.toLowerCase() === 'red' ? 'redPool' : 'greenPool';
+    
+    await Round.findOneAndUpdate(
+      { roundId: CURRENT_ROUND.id },
+      { 
+        $inc: { [updateField]: betAmount }
+      },
+      { 
+        session, 
+        upsert: true, // Create if doesn't exist
+        new: true 
       }
-         // Check balance
-const totalBalance = (user.wallet || 0) + (user.bonus || 0);
-if (totalBalance < amount) {
-await session.abortTransaction();
-session.endSession();
-return res.status(400).json({
-error: `Insufficient balance. You have ₹${totalBalance.toFixed(2)}`
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    console.log(✅ Bet placed: ${req.user.mobile} - ₹${betAmount} on ${color.toUpperCase()} (Round: ${CURRENT_ROUND.id}));
+
+    res.json({
+      message: "Bet placed successfully",
+      roundId: CURRENT_ROUND.id,
+      betAmount: betAmount,
+      color: color.toLowerCase(),
+      newWallet: user.wallet,
+      newBonus: user.bonus
+    });
+
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("❌ BET ERROR:", err);
+    res.status(500).json({ error: "Bet failed. Please try again." });
+  }
 });
+
+/* =========================
+FIXED ROUND PROCESSING
+========================= */
+async function processRoundEnd(roundId) {
+  const session = await mongoose.startSession();
+  
+  try {
+    await session.startTransaction();
+
+    console.log(\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━);
+    console.log(🎮 PROCESSING ROUND: ${roundId});
+    console.log(━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━);
+
+    // Get round
+    const round = await Round.findOne({ roundId }).session(session);
+    
+    if (!round) {
+      console.error('❌ Round not found:', roundId);
+      await session.abortTransaction();
+      session.endSession();
+      return;
+    }
+
+    // Check if already processed
+    if (round.winner) {
+      console.log('⚠️ Round already processed with winner:', round.winner);
+      await session.abortTransaction();
+      session.endSession();
+      return;
+    }
+
+    const redPool = round.redPool || 0;
+    const greenPool = round.greenPool || 0;
+    const totalPool = redPool + greenPool;
+
+    console.log(💰 RED POOL: ₹${redPool});
+    console.log(💰 GREEN POOL: ₹${greenPool});
+    console.log(💰 TOTAL POOL: ₹${totalPool});
+
+    // ✅ FIX: Determine winner (color with LESS money wins)
+    let winner;
+    
+    if (totalPool === 0) {
+      // No bets - no winner
+      console.log('⚠️ No bets placed in this round');
+      round.winner = 'none';
+      await round.save({ session });
+      await session.commitTransaction();
+      session.endSession();
+      return;
+    }
+    
+    if (redPool === greenPool) {
+      // Equal pools - random winner
+      winner = Math.random() < 0.5 ? 'red' : 'green';
+      console.log('⚖️ Equal pools - Random winner selected');
+    } else {
+      // Winner is the color with LESS total bets
+      winner = redPool < greenPool ? 'red' : 'green';
+    }
+
+    console.log(🏆 WINNER: ${winner.toUpperCase()});
+
+    // Save winner to round
+    round.winner = winner;
+    await round.save({ session });
+
+    // Get all pending bets for this round
+    const bets = await Bet.find({ 
+      roundId, 
+      status: 'PENDING' 
+    }).session(session);
+
+    console.log(📋 Processing ${bets.length} bets...);
+
+    let totalPayouts = 0;
+    let totalLosses = 0;
+
+    // Process each bet
+    for (const bet of bets) {
+      const user = await User.findOne({ mobile: bet.mobile }).session(session);
+      
+      if (!user) {
+        console.log(⚠️ User not found: ${bet.mobile});
+        continue;
+      }
+
+      if (bet.color === winner) {
+        // ✅ WINNER - Pay 1.96x (2x with 2% house edge)
+        const winAmount = Math.round(bet.amount * 2 * 0.98 * 100) / 100;
+        
+        // Credit to wallet
+        user.wallet = Math.round((user.wallet + winAmount) * 100) / 100;
+        
+        bet.status = 'WON';
+        bet.winAmount = winAmount;
+        
+        totalPayouts += winAmount;
+        
+        console.log(✅ ${user.mobile.substring(0, 4)}**** WON ₹${winAmount} (Bet: ₹${bet.amount} on ${bet.color.toUpperCase()}));
+      } else {
+        // ❌ LOSER - No payout (money already deducted when bet was placed)
+        bet.status = 'LOST';
+        bet.winAmount = 0;
+        
+        totalLosses += bet.amount;
+        
+        console.log(❌ ${user.mobile.substring(0, 4)}**** LOST ₹${bet.amount} (Bet on ${bet.color.toUpperCase()}));
+      }
+
+      await user.save({ session });
+      await bet.save({ session });
+    }
+
+    const houseProfit = totalLosses - totalPayouts;
+
+    console.log(━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━);
+    console.log(💸 Total Payouts: ₹${totalPayouts.toFixed(2)});
+    console.log(💰 Total Losses: ₹${totalLosses.toFixed(2)});
+    console.log(🏦 House Profit: ₹${houseProfit.toFixed(2)});
+    console.log(━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n);
+
+    await session.commitTransaction();
+    session.endSession();
+
+    console.log(✅ Round ${roundId} processed successfully\n);
+
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error('❌ ERROR PROCESSING ROUND:', err);
+  }
 }
-// Check for duplicate bet
-const existingBet = await Bet.findOne({ mobile, roundId: CURRENT_ROUND.id }).session(session);
-if (existingBet) {
-await session.abortTransaction();
-session.endSession();
-return res.status(400).json({
-error: `Already bet ₹${existingBet.amount} on ${existingBet.color}`
-});
-}
-// Deduct from wallet/bonus (bonus used first)
-let deductFromBonus = 0;
-let deductFromWallet = 0;
-if (user.bonus >= amount) {
-deductFromBonus = amount;
-} else {
-deductFromBonus = user.bonus;
-deductFromWallet = amount - user.bonus;
-}
-user.bonus = Math.max(0, Math.round((user.bonus - deductFromBonus) * 100) / 100);
-user.wallet = Math.max(0, Math.round((user.wallet - deductFromWallet) * 100) / 100);
-user.totalWagered = Math.round(((user.totalWagered || 0) + amount) * 100) / 100; await user.save({ session });
-// Create bet
-const newBet = new Bet({
-mobile,
-roundId: CURRENT_ROUND.id,
-color: color.toLowerCase(),
-amount: Math.round(amount * 100) / 100,
-status: 'PENDING',
-createdAt: new Date()
-});
-await newBet.save({ session });
-// Update round pools atomically
-const currentRound = await Round.findOne({ roundId: CURRENT_ROUND.id }).session(session);
-if (currentRound) {
-if (color.toLowerCase() === 'red') {
-currentRound.redPool = Math.round((currentRound.redPool + amount) * 100) / 100;
-} else {
-currentRound.greenPool = Math.round((currentRound.greenPool + amount) * 100) / 100;
-}
-await currentRound.save({ session });
-}
-// Commit transaction
-await session.commitTransaction();
-session.endSession();
-console.log(`✅ Bet placed: ${mobile} - ₹${amount} on ${color}`);
-res.json({
-message: "Bet placed successfully",
-roundId: CURRENT_ROUND.id,
-newWallet: user.wallet,
-newBonus: user.bonus
-});
-} catch (err) {
-await session.abortTransaction();
-session.endSession();
-console.error("BET ERROR:", err);
-res.status(500).json({ error: "Bet failed. Please try again." });
-}
-});
+
+/* =========================
+ROUND TIMER - FIXED
+========================= */
+setInterval(async () => {
+  const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+  
+  if (elapsed >= 60) {
+    console.log('\n⏰ Round timer reached 60 seconds - Ending round...');
+    
+    // Process current round
+    await processRoundEnd(CURRENT_ROUND.id);
+    
+    // Start new round
+    CURRENT_ROUND = {
+      id: Date.now().toString(),
+      startTime: Date.now()
+    };
+    
+    // Create new round in database
+    await Round.create({
+      roundId: CURRENT_ROUND.id,
+      redPool: 0,
+      greenPool: 0,
+      winner: null
+    });
+    
+    console.log(\n🆕 NEW ROUND STARTED: ${CURRENT_ROUND.id}\n);
+  }
+}, 1000); // Check every second
+
+/* =========================
+INITIALIZE FIRST ROUND
+========================= */
+(async () => {
+  try {
+    console.log('\n🚀 Initializing game server...');
+    
+    // Check if current round exists
+    const existingRound = await Round.findOne({ roundId: CURRENT_ROUND.id });
+    
+    if (!existingRound) {
+      await Round.create({
+        roundId: CURRENT_ROUND.id,
+        redPool: 0,
+        greenPool: 0,
+        winner: null
+      });
+      console.log('✅ First round created:', CURRENT_ROUND.id);
+    } else {
+      console.log('✅ Resuming existing round:', CURRENT_ROUND.id);
+    }
+    
+    console.log('✅ Game server ready!\n');
+  } catch (err) {
+    console.error('❌ Round initialization error:', err);
+  }
+})();
 /* =========================
 ROUND INFO
 ========================= */
