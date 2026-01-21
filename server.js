@@ -467,20 +467,20 @@ app.post("/bet", auth, async (req, res) => {
     if (existingBet) {
       await session.abortTransaction();
       session.endSession();
-return res.status(400).json({
-  error: `Already placed bet in this round: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}`  // ✅ FIXED
-});
+      return res.status(400).json({
+        error: `Already placed bet in this round: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}`
+      });
     }
 
     // Check balance
-const totalBalance = (user.wallet || 0) + (user.bonus || 0);
-if (totalBalance < betAmount) {
-  await session.abortTransaction();
-  session.endSession();
-  return res.status(400).json({
-    error: `Insufficient balance. Available: ₹${totalBalance.toFixed(2)}`  // ✅ FIXED - Added backtick
-  });
-}
+    const totalBalance = (user.wallet || 0) + (user.bonus || 0);
+    if (totalBalance < betAmount) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: `Insufficient balance. Available: ₹${totalBalance.toFixed(2)}`
+      });
+    }
 
     // Deduct from bonus first, then wallet
     let deductFromBonus = Math.min(user.bonus, betAmount);
@@ -502,7 +502,7 @@ if (totalBalance < betAmount) {
       createdAt: new Date()
     }], { session });
 
-    // ✅ FIX: Update round pools atomically
+    // Update round pools atomically
     const updateField = color.toLowerCase() === 'red' ? 'redPool' : 'greenPool';
     
     await Round.findOneAndUpdate(
@@ -512,7 +512,7 @@ if (totalBalance < betAmount) {
       },
       { 
         session, 
-        upsert: true, // Create if doesn't exist
+        upsert: true,
         new: true 
       }
     );
@@ -520,7 +520,7 @@ if (totalBalance < betAmount) {
     await session.commitTransaction();
     session.endSession();
 
-    console.log(✅ Bet placed: ${req.user.mobile} - ₹${betAmount} on ${color.toUpperCase()} (Round: ${CURRENT_ROUND.id}));
+    console.log(`✅ Bet placed: ${req.user.mobile} - ₹${betAmount} on ${color.toUpperCase()} (Round: ${CURRENT_ROUND.id})`);
 
     res.json({
       message: "Bet placed successfully",
@@ -538,7 +538,6 @@ if (totalBalance < betAmount) {
     res.status(500).json({ error: "Bet failed. Please try again." });
   }
 });
-
 /* =========================
 FIXED ROUND PROCESSING
 ========================= */
