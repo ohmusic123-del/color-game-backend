@@ -609,7 +609,7 @@ await updated.save({ session });
       console.log('📋 No bets to process - Round completed with random winner');
       await session.commitTransaction();
       session.endSession();
-console.log(✅ Round ${updated.roundId} completed);
+console.log(`✅ Round ${updated.roundId} completed`);
       return;
     }
 
