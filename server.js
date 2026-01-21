@@ -578,8 +578,9 @@ async function processRoundEnd(roundId) {
     let winner;
     
     if (totalPool === 0) {
-      console.log('⚠️ No bets placed in this round');
-      round.winner = 'none';
+      // No bets - leave winner as null
+      console.log('⚠️ No bets placed in this round - Skipping payout');
+      round.winner = null;  // ✅ FIXED - Changed from 'none' to null
       await round.save({ session });
       await session.commitTransaction();
       session.endSession();
