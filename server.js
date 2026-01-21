@@ -505,18 +505,12 @@ app.post("/bet", auth, async (req, res) => {
     // Update round pools atomically
     const updateField = color.toLowerCase() === 'red' ? 'redPool' : 'greenPool';
     
-    await Round.findOneAndUpdate(
-      { roundId: CURRENT_ROUND.id },
-      { 
-        $inc: { [updateField]: betAmount }
-      },
-      { 
-        session, 
-        upsert: true,
-        new: true 
-      }
-    );
-
+// ❌ REMOVE upsert logic completely
+await Round.findOneAndUpdate(
+  { roundId: CURRENT_ROUND.id },
+  { $inc: { [updateField]: betAmount } },
+  { session }
+);
     await session.commitTransaction();
     session.endSession();
 
@@ -561,16 +555,22 @@ async function processRoundEnd(roundId) {
     }
 
     // Check if already processed
-    if (round.winner !== null) {
-      console.log('⚠️ Round already processed with winner:', round.winner);
-      await session.abortTransaction();
-      session.endSession();
-      return;
-    }
+const updated = await Round.findOneAndUpdate(
+  { roundId, winner: null },
+  { $set: { winner: '_PROCESSING_' } },
+  { session }
+);
 
-    const redPool = round.redPool || 0;
-    const greenPool = round.greenPool || 0;
-    const totalPool = redPool + greenPool;
+if (!updated) {
+  console.log('⚠️ Round already processed by another worker');
+  await session.abortTransaction();
+  session.endSession();
+  return;
+}
+
+  const redPool = updated.redPool || 0;
+const greenPool = updated.greenPool || 0;
+const totalPool = redPool + greenPool;
 
     console.log(`💰 RED POOL: ₹${redPool}`);
     console.log(`💰 GREEN POOL: ₹${greenPool}`);
@@ -596,8 +596,8 @@ async function processRoundEnd(roundId) {
     console.log(`🏆 WINNER: ${winner.toUpperCase()}`);
 
     // Save winner to round
-    round.winner = winner;
-    await round.save({ session });
+   updated.winner = winner;
+await updated.save({ session });
 
     // Get all pending bets for this round
     const bets = await Bet.find({ 
@@ -609,7 +609,7 @@ async function processRoundEnd(roundId) {
       console.log('📋 No bets to process - Round completed with random winner');
       await session.commitTransaction();
       session.endSession();
-      console.log(`✅ Round ${roundId} completed\n`);
+console.log(✅ Round ${updated.roundId} completed);
       return;
     }
 
