@@ -547,9 +547,9 @@ async function processRoundEnd(roundId) {
   try {
     await session.startTransaction();
 
-    console.log(\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━);
-    console.log(🎮 PROCESSING ROUND: ${roundId});
-    console.log(━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━);
+    console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);  // ✅ FIXED - Added backticks
+    console.log(`🎮 PROCESSING ROUND: ${roundId}`);      // ✅ FIXED - Added backticks
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);    // ✅ FIXED - Added backticks
 
     // Get round
     const round = await Round.findOne({ roundId }).session(session);
@@ -573,15 +573,14 @@ async function processRoundEnd(roundId) {
     const greenPool = round.greenPool || 0;
     const totalPool = redPool + greenPool;
 
-    console.log(💰 RED POOL: ₹${redPool});
-    console.log(💰 GREEN POOL: ₹${greenPool});
-    console.log(💰 TOTAL POOL: ₹${totalPool});
+    console.log(`💰 RED POOL: ₹${redPool}`);      // ✅ FIXED - Added backticks
+    console.log(`💰 GREEN POOL: ₹${greenPool}`);  // ✅ FIXED - Added backticks
+    console.log(`💰 TOTAL POOL: ₹${totalPool}`);  // ✅ FIXED - Added backticks
 
-    // ✅ FIX: Determine winner (color with LESS money wins)
+    // Determine winner
     let winner;
     
     if (totalPool === 0) {
-      // No bets - no winner
       console.log('⚠️ No bets placed in this round');
       round.winner = 'none';
       await round.save({ session });
@@ -591,27 +590,25 @@ async function processRoundEnd(roundId) {
     }
     
     if (redPool === greenPool) {
-      // Equal pools - random winner
       winner = Math.random() < 0.5 ? 'red' : 'green';
       console.log('⚖️ Equal pools - Random winner selected');
     } else {
-      // Winner is the color with LESS total bets
       winner = redPool < greenPool ? 'red' : 'green';
     }
 
-    console.log(🏆 WINNER: ${winner.toUpperCase()});
+    console.log(`🏆 WINNER: ${winner.toUpperCase()}`);  // ✅ FIXED - Added backticks
 
     // Save winner to round
     round.winner = winner;
     await round.save({ session });
 
-    // Get all pending bets for this round
+    // Get all pending bets
     const bets = await Bet.find({ 
       roundId, 
       status: 'PENDING' 
     }).session(session);
 
-    console.log(📋 Processing ${bets.length} bets...);
+    console.log(`📋 Processing ${bets.length} bets...`);  // ✅ FIXED - Added backticks
 
     let totalPayouts = 0;
     let totalLosses = 0;
@@ -621,15 +618,14 @@ async function processRoundEnd(roundId) {
       const user = await User.findOne({ mobile: bet.mobile }).session(session);
       
       if (!user) {
-        console.log(⚠️ User not found: ${bet.mobile});
+        console.log(`⚠️ User not found: ${bet.mobile}`);  // ✅ FIXED - Added backticks
         continue;
       }
 
       if (bet.color === winner) {
-        // ✅ WINNER - Pay 1.96x (2x with 2% house edge)
+        // WINNER - Pay 1.96x
         const winAmount = Math.round(bet.amount * 2 * 0.98 * 100) / 100;
         
-        // Credit to wallet
         user.wallet = Math.round((user.wallet + winAmount) * 100) / 100;
         
         bet.status = 'WON';
@@ -637,15 +633,15 @@ async function processRoundEnd(roundId) {
         
         totalPayouts += winAmount;
         
-        console.log(✅ ${user.mobile.substring(0, 4)}**** WON ₹${winAmount} (Bet: ₹${bet.amount} on ${bet.color.toUpperCase()}));
+        console.log(`✅ ${user.mobile.substring(0, 4)}**** WON ₹${winAmount} (Bet: ₹${bet.amount} on ${bet.color.toUpperCase()})`);  // ✅ FIXED
       } else {
-        // ❌ LOSER - No payout (money already deducted when bet was placed)
+        // LOSER
         bet.status = 'LOST';
         bet.winAmount = 0;
         
         totalLosses += bet.amount;
         
-        console.log(❌ ${user.mobile.substring(0, 4)}**** LOST ₹${bet.amount} (Bet on ${bet.color.toUpperCase()}));
+        console.log(`❌ ${user.mobile.substring(0, 4)}**** LOST ₹${bet.amount} (Bet on ${bet.color.toUpperCase()})`);  // ✅ FIXED
       }
 
       await user.save({ session });
@@ -654,23 +650,23 @@ async function processRoundEnd(roundId) {
 
     const houseProfit = totalLosses - totalPayouts;
 
-    console.log(━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━);
-    console.log(💸 Total Payouts: ₹${totalPayouts.toFixed(2)});
-    console.log(💰 Total Losses: ₹${totalLosses.toFixed(2)});
-    console.log(🏦 House Profit: ₹${houseProfit.toFixed(2)});
-    console.log(━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);              // ✅ FIXED - Added backticks
+    console.log(`💸 Total Payouts: ₹${totalPayouts.toFixed(2)}`);  // ✅ FIXED - Added backticks
+    console.log(`💰 Total Losses: ₹${totalLosses.toFixed(2)}`);    // ✅ FIXED - Added backticks
+    console.log(`🏦 House Profit: ₹${houseProfit.toFixed(2)}`);    // ✅ FIXED - Added backticks
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);            // ✅ FIXED - Added backticks
 
     await session.commitTransaction();
     session.endSession();
 
-    console.log(✅ Round ${roundId} processed successfully\n);
+    console.log(`✅ Round ${roundId} processed successfully\n`);  // ✅ FIXED - Added backticks
 
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
     console.error('❌ ERROR PROCESSING ROUND:', err);
   }
-}
+    }
 
 /* =========================
 ROUND TIMER - FIXED
@@ -679,7 +675,7 @@ setInterval(async () => {
   const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
   
   if (elapsed >= 60) {
-    console.log('\n⏰ Round timer reached 60 seconds - Ending round...');
+    console.log('\n⏰ Round timer reached 60 seconds - Ending round...');  // ✅ Already correct
     
     // Process current round
     await processRoundEnd(CURRENT_ROUND.id);
@@ -698,9 +694,9 @@ setInterval(async () => {
       winner: null
     });
     
-    console.log(\n🆕 NEW ROUND STARTED: ${CURRENT_ROUND.id}\n);
+    console.log(`\n🆕 NEW ROUND STARTED: ${CURRENT_ROUND.id}\n`);  // ✅ FIXED - Added backticks
   }
-}, 1000); // Check every second
+}, 1000);
 
 /* =========================
 INITIALIZE FIRST ROUND
