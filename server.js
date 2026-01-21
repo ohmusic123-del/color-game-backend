@@ -605,16 +605,19 @@ await updated.save({ session });
       status: 'PENDING' 
     }).session(session);
 
-    if (bets.length === 0) {
-      console.log('📋 No bets to process - Round completed with random winner');
-      await session.commitTransaction();
-      session.endSession();
-console.log(`✅ Round ${updated.roundId} completed`);
-      return;
-    }
+if (bets.length === 0) {
+  updated.winner = winner;          // 🔥 FINALIZE ROUND
+  await updated.save({ session });
+
+  await session.commitTransaction();
+  session.endSession();
+
+  console.log(`✅ Round ${roundId} completed (no bets)`);
+  return;
+}
 
     console.log(`📋 Processing ${bets.length} bets...`);
-
+ 
     let totalPayouts = 0;
     let totalLosses = 0;
 
@@ -665,7 +668,7 @@ console.log(`✅ Round ${updated.roundId} completed`);
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`✅ Round ${roundId} processed successfully\n`);
+    console.log(`✅ Round ${roundId} processed successfully`);
 
   } catch (err) {
     await session.abortTransaction();
