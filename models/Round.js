@@ -18,7 +18,12 @@ const roundSchema = new mongoose.Schema({
     type: String,
     enum: ['red', 'green', null],
     default: null
-  },
+  }
+  status: {
+  type: String,
+  enum: ['OPEN', 'CLOSED'],
+  default: 'OPEN'
+},
 }, {
   timestamps: true
 });
