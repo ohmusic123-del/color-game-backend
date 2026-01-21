@@ -539,7 +539,7 @@ app.post("/bet", auth, async (req, res) => {
   }
 });
 /* =========================
-FIXED ROUND PROCESSING
+FIXED ROUND PROCESSING - RANDOM WINNER ON NO BETS OR EQUAL BETS
 ========================= */
 async function processRoundEnd(roundId) {
   const session = await mongoose.startSession();
@@ -560,7 +560,8 @@ async function processRoundEnd(roundId) {
       return;
     }
 
-    if (round.winner) {
+    // Check if already processed
+    if (round.winner !== null) {
       console.log('⚠️ Round already processed with winner:', round.winner);
       await session.abortTransaction();
       session.endSession();
@@ -575,36 +576,49 @@ async function processRoundEnd(roundId) {
     console.log(`💰 GREEN POOL: ₹${greenPool}`);
     console.log(`💰 TOTAL POOL: ₹${totalPool}`);
 
+    // ✅ DETERMINE WINNER
     let winner;
     
     if (totalPool === 0) {
-      // No bets - leave winner as null
-      console.log('⚠️ No bets placed in this round - Skipping payout');
-      round.winner = null;  // ✅ FIXED - Changed from 'none' to null
-      await round.save({ session });
-      await session.commitTransaction();
-      session.endSession();
-      return;
-    }
-    
-    if (redPool === greenPool) {
+      // ✅ NO BETS - Random winner
+      winner = Math.random() < 0.5 ? 'red' : 'green';
+      console.log('🎲 No bets - Random winner selected');
+    } else if (redPool === greenPool) {
+      // ✅ EQUAL BETS - Random winner
       winner = Math.random() < 0.5 ? 'red' : 'green';
       console.log('⚖️ Equal pools - Random winner selected');
     } else {
+      // ✅ DIFFERENT BETS - Smaller pool wins
       winner = redPool < greenPool ? 'red' : 'green';
+      console.log('📊 Different pools - Smaller pool wins');
     }
 
     console.log(`🏆 WINNER: ${winner.toUpperCase()}`);
 
+    // Save winner to round
     round.winner = winner;
     await round.save({ session });
 
-    const bets = await Bet.find({ roundId, status: 'PENDING' }).session(session);
+    // Get all pending bets for this round
+    const bets = await Bet.find({ 
+      roundId, 
+      status: 'PENDING' 
+    }).session(session);
+
+    if (bets.length === 0) {
+      console.log('📋 No bets to process - Round completed with random winner');
+      await session.commitTransaction();
+      session.endSession();
+      console.log(`✅ Round ${roundId} completed\n`);
+      return;
+    }
+
     console.log(`📋 Processing ${bets.length} bets...`);
 
     let totalPayouts = 0;
     let totalLosses = 0;
 
+    // Process each bet
     for (const bet of bets) {
       const user = await User.findOne({ mobile: bet.mobile }).session(session);
       
@@ -614,17 +628,26 @@ async function processRoundEnd(roundId) {
       }
 
       if (bet.color === winner) {
+        // ✅ WINNER - Pay 1.96x (2x with 2% house edge)
         const winAmount = Math.round(bet.amount * 2 * 0.98 * 100) / 100;
+        
+        // Credit to wallet
         user.wallet = Math.round((user.wallet + winAmount) * 100) / 100;
+        
         bet.status = 'WON';
         bet.winAmount = winAmount;
+        
         totalPayouts += winAmount;
-        console.log(`✅ ${user.mobile.substring(0, 4)}**** WON ₹${winAmount} (Bet: ₹${bet.amount})`);
+        
+        console.log(`✅ ${user.mobile.substring(0, 4)}**** WON ₹${winAmount} (Bet: ₹${bet.amount} on ${bet.color.toUpperCase()})`);
       } else {
+        // ❌ LOSER - No payout (money already deducted)
         bet.status = 'LOST';
         bet.winAmount = 0;
+        
         totalLosses += bet.amount;
-        console.log(`❌ ${user.mobile.substring(0, 4)}**** LOST ₹${bet.amount}`);
+        
+        console.log(`❌ ${user.mobile.substring(0, 4)}**** LOST ₹${bet.amount} (Bet on ${bet.color.toUpperCase()})`);
       }
 
       await user.save({ session });
@@ -649,7 +672,7 @@ async function processRoundEnd(roundId) {
     session.endSession();
     console.error('❌ ERROR PROCESSING ROUND:', err);
   }
-  }
+          }
 /* =========================
 ROUND TIMER - FIXED
 ========================= */
