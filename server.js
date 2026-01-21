@@ -1120,7 +1120,10 @@ winner = Math.random() < 0.5 ? 'red' : 'green';
 winner = redPool < greenPool ? 'red' : 'green';
 }
 // Update round with winner
-round.winner = winner;
+round.winner = winningColor;
+round.status = "COMPLETED";      // ✅ ADD THIS
+round.endedAt = new Date();      // ✅ ADD THIS (important)
+
 await round.save();
 console.log(`📊 Pools - Red: ₹${redPool}, Green: ₹${greenPool}`);
 console.log(`🏆 Winner: ${winner.toUpperCase()}`);
