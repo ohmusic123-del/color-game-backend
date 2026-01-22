@@ -152,7 +152,7 @@ app.post("/api/cashfree/webhook", async (req, res) => {
     return res.status(200).send("OK");
   }
 });
-}); app.post("/api/cashfree/create-order", auth, async (req, res) => {
+ app.post("/api/cashfree/create-order", auth, async (req, res) => {
 try {
 const { amount } = req.body;
 if (!amount || Number(amount) < 10) {
@@ -247,7 +247,9 @@ deposited: false,
 depositAmount: 0,
 totalWagered: 0,
 referralCode: uniqueCode,
-referredBy: referrer ? referrer.referralCode : null, await newUser.save();
+referredBy: referrer ? referrer.referralCode : null 
+});
+  await newUser.save();
 if (referrer) {
 referrer.totalReferrals += 1;
 await referrer.save();
