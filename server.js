@@ -491,7 +491,7 @@ winner = Math.random() < 0.5 ? 'red' : 'green';
 console.log('🎲 No bets - Random winner selected');
 } else if (redPool === greenPool) {
 winner = Math.random() < 0.5 ? 'red' : 'green';
-console.log('⚖️ Equal pools - Random winner selected'
+console.log('⚖️ Equal pools - Random winner selected');
 } else {
 winner = redPool < greenPool ? 'red' : 'green';
 console.log('📊 Different pools - Smaller pool wins');
