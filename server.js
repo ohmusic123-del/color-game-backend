@@ -679,89 +679,72 @@ res.status(500).json({ error: "Server error" });
 }
 });
 /* =========================
-WITHDRAWAL
+WITHDRAWAL - FIXED
 ========================= */
 app.post("/withdraw", auth, async (req, res) => {
-try {
-const { amount } = req.body;
-const user = await User.findOne({ mobile: req.user.mobile;
+  try {
+    const { amount } = req.body;
+    
+    if (!amount || amount < 100) {
+      return res.status(400).json({ error: "Minimum withdrawal ₹100" });
+    }
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check if user has set withdrawal method
+    if (!user.withdrawMethod || !user.withdrawDetails) {
+      return res.status(400).json({ 
+        error: "Please set withdrawal method first" 
+      });
+    }
+
+    // Check if user has sufficient balance
+    if (user.wallet < amount) {
+      return res.status(400).json({ 
+        error: `Insufficient balance. Available: ₹${user.wallet.toFixed(2)}` 
+      });
+    }
+
+    // Check if user has made a deposit
+    if (!user.deposited) {
+      return res.status(400).json({ 
+        error: "You must make a deposit before withdrawing" 
+      });
+    }
+
+    // Deduct amount from wallet
+    user.wallet = Math.round((user.wallet - amount) * 100) / 100;
+    await user.save();
+
+    // Create withdrawal request
+    const withdrawal = await Withdraw.create({
+      mobile: user.mobile,
+      amount: amount,
+      method: user.withdrawMethod,
+      details: user.withdrawDetails,
+      status: "PENDING"
+    });
+
+    console.log(`✅ Withdrawal request: ${user.mobile} - ₹${amount} (${user.withdrawMethod})`);
+
+    res.json({
+      message: "Withdrawal request submitted successfully",
+      withdrawal: {
+        id: withdrawal._id,
+        amount: withdrawal.amount,
+        status: withdrawal.status,
+        method: withdrawal.method
+      },
+      newWallet: user.wallet
+    });
+
   } catch (err) {
     console.error("Withdraw error:", err);
     res.status(500).json({ error: "Withdrawal failed" });
-  }
-});
-
-app.get("/wallet/withdraw-history", auth, async (req, res) => {
-  try {
-    const withdrawals = await Withdraw.find({ mobile: req.user.mobile })
-      .sort({ createdAt: -1 })
-      .limit(20);
-
-    res.json(withdrawals);
-  } catch (err) {
-    console.error("Withdraw history error:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-app.post('/withdraw/method', auth, async (req, res) => {
-  try {
-    const { method, details } = req.body;
-
-    if (!method || !details) {
-      return res.status(400).json({ message: 'Method and details required' });
-    }
-
-    if (!['upi', 'bank', 'usdt'].includes(method)) {
-      return res.status(400).json({ message: 'Invalid withdrawal method' });
-    }
-
-    if (method === 'upi') {
-      if (!details.upiId || !/^[\w.-]+@[\w.-]+$/.test(details.upiId)) {
-        return res.status(400).json({ message: 'Invalid UPI ID format' });
-      }
-    } else if (method === 'bank') {
-      if (!details.accountNumber || !details.ifsc || !details.accountHolder) {
-        return res.status(400).json({ message: 'Bank details incomplete' });
-      }
-    }
-
-    const user = await User.findOne({ mobile: req.user.mobile });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    user.withdrawMethod = method;
-    user.withdrawDetails = details;
-    await user.save();
-
-    console.log(`✅ Withdrawal method saved: ${user.mobile} - ${method}`);
-
-    res.json({
-      message: 'Withdrawal method saved successfully',
-      method: user.withdrawMethod,
-      details: user.withdrawDetails
-    });
-  } catch (err) {
-    console.error('Save withdraw method error:', err);
-    res.status(500).json({ message: 'Error saving withdrawal method' });
-  }
-});
-
-app.get('/withdraw/method', auth, async (req, res) => {
-  try {
-    const user = await User.findOne({ mobile: req.user.mobile });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    res.json({
-      method: user.withdrawMethod,
-      details: user.withdrawDetails
-    });
-  } catch (err) {
-    console.error('Get withdraw method error:', err);
-    res.status(500).json({ message: 'Error fetching withdrawal method' });
   }
 });
 
