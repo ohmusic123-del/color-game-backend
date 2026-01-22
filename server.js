@@ -158,21 +158,27 @@ app.post("/api/cashfree/webhook", async (req, res) => {
  app.post("/api/cashfree/create-order", auth, async (req, res) => {
 try {
 const { amount } = req.body;
-if (!amount || Number(amount) < 10) {
-return res.status(400).json({ message: "Minimum deposit ₹10" });
+if (!amount || amount < 100) {
+  return res.status(400).json({ error: "Minimum deposit is 100" });
 }
 const user = await User.findOne({ mobile: req.user.mobile });
 if (!user) return res.status(404).json({ message: "User not found" });
 const orderId = `ORDER_${Date.now()}`;
 const request = {
-order_amount: Number(amount),
-order_currency: "INR",
-order_id: orderId,
-customer_details: {
-customer_id: user.mobile,
-customer_phone: user.mobile,
-customer_email: user.email || "user@gmail.com",
-},
+  order_id: orderId,
+  order_amount: amount,
+  order_currency: "INR",
+
+  customer_details: {
+    customer_id: user.mobile,
+    customer_phone: user.mobile,
+    customer_email: `${user.mobile}@bigwin.in`
+  },
+
+  order_meta: {
+    notify_url: "https://color-game-backend1.onrender.com/api/cashfree/webhook",
+    return_url: "https://color-game-frontend.pages.dev/wallet"
+  }
 };
 const response = await Cashfree.PGCreateOrder("2023-08-01", request);
 await Deposit.create({
