@@ -37,8 +37,15 @@ return res.status(401).json({ error: "Invalid admin token" });
 }
 }
 Cashfree.XClientId = process.env.CASHFREE_APP_ID;
-Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY; 5: 0.01, // 1%
-6: 0.01 // 1%
+Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
+
+const COMMISSION_RATES = {
+  1: 0.10, // 10%
+  2: 0.05, // 5%
+  3: 0.03, // 3%
+  4: 0.02, // 2%
+  5: 0.01, // 1%
+  6: 0.01  // 1%
 };
 /* =========================
 PROCESS REFERRAL COMMISSION
