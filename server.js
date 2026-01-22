@@ -427,7 +427,7 @@ createdAt: new Date()
 const updateField = color.toLowerCase() === 'red' ? 'redPool' : 'greenPool';
 let round = await Round.findOne({ roundId: CURRENT_ROUND.id }).session(session);
 if (!round) {
-console.log(`⚠️ Round ${CURRENT_ROUND.id} not found - Creating it now!`
+console.log(`⚠️ Round ${CURRENT_ROUND.id} not found - Creating it now!`);
 const created = await Round.create([{
 roundId: CURRENT_ROUND.id,
 redPool: 0,
