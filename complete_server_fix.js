@@ -790,3 +790,609 @@ app.post('/withdraw/method', auth, async (req, res) => {
     if (!['upi', 'bank', 'usdt'].includes(method)) {
       return res.status(400).json({ message: 'Invalid withdrawal method' });
     }
+
+if (method === 'upi') {
+      if (!details.upiId || !/^[\w.-]+@[\w.-]+$/.test(details.upiId)) {
+        return res.status(400).json({ message: 'Invalid UPI ID format' });
+      }
+    } else if (method === 'bank') {
+      if (!details.accountNumber || !details.ifsc || !details.accountHolder) {
+        return res.status(400).json({ message: 'Bank details incomplete' });
+      }
+    }
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.withdrawMethod = method;
+    user.withdrawDetails = details;
+    await user.save();
+
+    console.log(`✅ Withdrawal method saved: ${user.mobile} - ${method}`);
+
+    res.json({
+      message: 'Withdrawal method saved successfully',
+      method: user.withdrawMethod,
+      details: user.withdrawDetails
+    });
+  } catch (err) {
+    console.error('Save withdraw method error:', err);
+    res.status(500).json({ message: 'Error saving withdrawal method' });
+  }
+});
+
+app.get('/withdraw/method', auth, async (req, res) => {
+  try {
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      method: user.withdrawMethod,
+      details: user.withdrawDetails
+    });
+  } catch (err) {
+    console.error('Get withdraw method error:', err);
+    res.status(500).json({ message: 'Error fetching withdrawal method' });
+  }
+});
+
+/* =========================
+WALLET HISTORY
+========================= */
+app.get("/wallet/history", auth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    const withdrawals = await Withdraw.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    const history = [
+      ...deposits.map(d => ({ ...d, type: 'deposit' })),
+      ...withdrawals.map(w => ({ ...w, type: 'withdraw' }))
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 20);
+
+    res.json(history);
+  } catch (err) {
+    console.error("Wallet history error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+REFERRAL SYSTEM
+========================= */
+app.get("/referral/info", auth, async (req, res) => {
+  try {
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const directReferrals = await User.find({ referredBy: user.referralCode });
+
+    const getAllReferrals = async (referralCode, level = 1, allRefs = []) => {
+      if (level > 6) return allRefs;
+
+      const refs = await User.find({ referredBy: referralCode })
+        .select('mobile referralCode depositAmount totalWagered createdAt deposited');
+
+      for (const ref of refs) {
+        allRefs.push({
+          mobile: ref.mobile,
+          level,
+          depositAmount: ref.depositAmount || 0,
+          totalWagered: ref.totalWagered || 0,
+          deposited: ref.deposited || false,
+          joinedAt: ref.createdAt
+        });
+
+        await getAllReferrals(ref.referralCode, level + 1, allRefs);
+      }
+
+      return allRefs;
+    };
+
+    const allReferrals = await getAllReferrals(user.referralCode);
+
+    const commissions = await Referral.find({ userId: user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    const levelBreakdown = {
+      level1: { count: 0, earnings: 0 },
+      level2: { count: 0, earnings: 0 },
+      level3: { count: 0, earnings: 0 },
+      level4: { count: 0, earnings: 0 },
+      level5: { count: 0, earnings: 0 },
+      level6: { count: 0, earnings: 0 }
+    };
+
+    allReferrals.forEach(ref => {
+      levelBreakdown[`level${ref.level}`].count += 1;
+    });
+
+    commissions.forEach(comm => {
+      levelBreakdown[`level${comm.level}`].earnings += comm.commission;
+    });
+
+    return res.json({
+      referralCode: user.referralCode,
+      totalReferrals: user.totalReferrals || directReferrals.length,
+      totalEarnings: user.referralEarnings || 0,
+      directReferrals: directReferrals.length,
+      allTeamMembers: allReferrals.length,
+      teamMembers: allReferrals,
+      commissions: commissions,
+      levelBreakdown: levelBreakdown
+    });
+  } catch (err) {
+    console.error('Referral info error:', err);
+    return res.status(500).json({ message: 'Error fetching referral data' });
+  }
+});
+      /* =========================
+ADMIN LOGIN
+========================= */
+app.post("/admin/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    const ADMIN_USERNAME = "admin";
+    const ADMIN_PASSWORD = "admin123";
+
+    if (!username || !password) {
+      return res.status(400).json({ error: "Username and password required" });
+    }
+
+    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+      const token = jwt.sign(
+        { username: username, role: "admin" },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      console.log('✅ Admin logged in:', username);
+
+      return res.json({
+        message: "Admin login successful",
+        token: `Bearer ${token}`
+      });
+    } else {
+      return res.status(401).json({ error: "Invalid admin credentials" });
+    }
+  } catch (err) {
+    console.error('Admin login error:', err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+ADMIN ENDPOINTS
+========================= */
+app.get("/admin/stats", adminAuth, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalDeposits = await Deposit.aggregate([
+      { $match: { status: "SUCCESS" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    const totalWithdraws = await Withdraw.aggregate([
+      { $match: { status: "APPROVED" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    const totalWallet = await User.aggregate([
+      { $group: { _id: null, total: { $sum: "$wallet" } } }
+    ]);
+
+    const totalRounds = await Round.countDocuments();
+    const profit = (totalDeposits[0]?.total || 0) - (totalWithdraws[0]?.total || 0);
+
+    res.json({
+      totalUsers,
+      totalDeposits: totalDeposits[0]?.total || 0,
+      totalWithdraws: totalWithdraws[0]?.total || 0,
+      totalWallet: totalWallet[0]?.total || 0,
+      profit,
+      totalRounds
+    });
+  } catch (err) {
+    console.error("Admin stats error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/users", adminAuth, async (req, res) => {
+  try {
+    const users = await User.find()
+      .select('-password')
+      .sort({ createdAt: -1 })
+      .limit(100);
+    res.json(users);
+  } catch (err) {
+    console.error("Admin users error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/deposits", adminAuth, async (req, res) => {
+  try {
+    const deposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(100);
+    res.json(deposits);
+  } catch (err) {
+    console.error("Admin deposits error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/admin/deposit/:id", adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, adminNote } = req.body;
+
+    const deposit = await Deposit.findById(id);
+    if (!deposit) {
+      return res.status(404).json({ error: "Deposit not found" });
+    }
+
+    if (deposit.status !== "PENDING") {
+      return res.status(400).json({ error: "Deposit already processed" });
+    }
+
+    const user = await User.findOne({ mobile: deposit.mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (action === "approve") {
+      deposit.status = "SUCCESS";
+      deposit.adminNote = adminNote || "Approved";
+
+      user.wallet = Math.round((user.wallet + deposit.amount) * 100) / 100;
+      user.deposited = true;
+      user.depositAmount = Math.round((user.depositAmount + deposit.amount) * 100) / 100;
+
+      const isFirstDeposit = user.depositAmount === deposit.amount;
+      if (isFirstDeposit) {
+        user.bonus = Math.round((user.bonus + deposit.amount) * 100) / 100;
+      }
+await user.save();
+      await processReferralCommission(user.mobile, deposit.amount, "DEPOSIT");
+    } else if (action === "reject") {
+      deposit.status = "FAILED";
+      deposit.adminNote = adminNote || "Rejected";
+    }
+
+    await deposit.save();
+
+    console.log(`✅ Admin ${action}d deposit: ${deposit.mobile} - ₹${deposit.amount}`);
+
+    res.json({
+      message: `Deposit ${action}d successfully`,
+      deposit
+    });
+  } catch (err) {
+    console.error("Admin deposit action error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/withdraws", adminAuth, async (req, res) => {
+  try {
+    const withdrawals = await Withdraw.find()
+      .sort({ createdAt: -1 })
+      .limit(100);
+    res.json(withdrawals);
+  } catch (err) {
+    console.error("Admin withdraws error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/admin/withdraw/:id", adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, adminNote } = req.body;
+
+    const withdrawal = await Withdraw.findById(id);
+    if (!withdrawal) {
+      return res.status(404).json({ error: "Withdrawal not found" });
+    }
+
+    if (withdrawal.status !== "PENDING") {
+      return res.status(400).json({ error: "Withdrawal already processed" });
+    }
+
+    const user = await User.findOne({ mobile: withdrawal.mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (action === "approve") {
+      withdrawal.status = "APPROVED";
+      withdrawal.adminNote = adminNote || "Approved";
+      withdrawal.processedAt = new Date();
+    } else if (action === "reject") {
+      withdrawal.status = "REJECTED";
+      withdrawal.adminNote = adminNote || "Rejected";
+      user.wallet = Math.round((user.wallet + withdrawal.amount) * 100) / 100;
+      await user.save();
+    }
+
+    await withdrawal.save();
+
+    console.log(`✅ Admin ${action}d withdrawal: ${withdrawal.mobile} - ₹${withdrawal.amount}`);
+
+    res.json({
+      message: `Withdrawal ${action}d successfully`,
+      withdrawal
+    });
+  } catch (err) {
+    console.error("Admin withdraw action error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+ENHANCED ADMIN ENDPOINTS
+========================= */
+app.get("/admin/dashboard-stats", adminAuth, async (req, res) => {
+  try {
+    const now = new Date();
+    const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const totalUsers = await User.countDocuments();
+    const newUsersThisWeek = await User.countDocuments({
+      createdAt: { $gte: lastWeek }
+    });
+
+    const totalDeposits = await Deposit.aggregate([
+      { $match: { status: "SUCCESS" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    const depositsThisWeek = await Deposit.aggregate([
+      { $match: { status: "SUCCESS", createdAt: { $gte: lastWeek } } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    const totalWithdrawals = await Withdraw.aggregate([
+      { $match: { status: "APPROVED" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    const pendingDeposits = await Deposit.countDocuments({ status: "PENDING" });
+    const pendingWithdrawals = await Withdraw.countDocuments({ status: "PENDING" });
+
+    const totalRevenue = totalDeposits[0]?.total || 0;
+    const totalPayout = totalWithdrawals[0]?.total || 0;
+    const netProfit = totalRevenue - totalPayout;
+
+    res.json({
+      totalUsers,
+      newUsersThisWeek,
+      totalRevenue,
+      revenueThisWeek: depositsThisWeek[0]?.total || 0,
+      netProfit,
+      pendingActions: pendingDeposits + pendingWithdrawals,
+      pendingDeposits,
+      pendingWithdrawals
+    });
+  } catch (err) {
+    console.error("Dashboard stats error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/live-activity", adminAuth, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+
+    const recentBets = await Bet.find()
+      .sort({ createdAt: -1 })
+      .limit(limit / 2)
+      .lean();
+
+    const recentDeposits = await Deposit.find()
+      .sort({ createdAt: -1 })
+      .limit(limit / 4)
+      .lean();
+
+    const recentWithdrawals = await Withdraw.find()
+      .sort({ createdAt: -1 })
+      .limit(limit / 4)
+      .lean();
+
+    const activities = [
+      ...recentBets.map(b => ({
+        type: 'bet',
+        title: `Bet placed on ${b.color.toUpperCase()}`,
+        user: b.mobile.substring(0, 4) + '****' + b.mobile.substring(8),
+        amount: b.amount,
+        time: b.createdAt
+      })),
+      ...recentDeposits.map(d => ({
+        type: 'deposit',
+        title: `Deposit ${d.status}`,
+        user: d.mobile.substring(0, 4) + '****' + d.mobile.substring(8),
+        amount: d.amount,
+        time: d.createdAt
+      })),
+      ...recentWithdrawals.map(w => ({
+        type: 'withdraw',
+        title: `Withdrawal ${w.status}`,
+        user: w.mobile.substring(0, 4) + '****' + w.mobile.substring(8),
+        amount: w.amount,
+        time: w.createdAt
+      }))
+    ]
+      .sort((a, b) => new Date(b.time) - new Date(a.time))
+      .slice(0, limit);
+
+    res.json(activities);
+  } catch (err) {
+    console.error("Live activity error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/user-analytics", adminAuth, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const depositedUsers = await User.countDocuments({ deposited: true });
+    const activeUsers = await Bet.distinct('mobile', {
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+
+    const topDepositors = await User.find()
+      .sort({ depositAmount: -1 })
+      .limit(10)
+      .select('mobile depositAmount wallet totalWagered');
+
+    const topWagerers = await User.find()
+      .sort({ totalWagered: -1 })
+      .limit(10)
+      .select('mobile totalWagered depositAmount wallet');
+
+    res.json({
+      totalUsers,
+      depositedUsers,
+      activeUsersToday: activeUsers.length,
+      conversionRate: ((depositedUsers / totalUsers) * 100).toFixed(2),
+      topDepositors,
+      topWagerers
+    });
+  } catch (err) {
+    console.error("User analytics error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/game-analytics", adminAuth, async (req, res) => {
+  try {
+    const totalBets = await Bet.countDocuments();
+    const totalWagered = await Bet.aggregate([
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+
+    const redBets = await Bet.countDocuments({ color: 'red' });
+    const greenBets = await Bet.countDocuments({ color: 'green' });
+    const wonBets = await Bet.countDocuments({ status: 'WON' });
+    const lostBets = await Bet.countDocuments({ status: 'LOST' });
+
+    const totalWinnings = await Bet.aggregate([
+      { $match: { status: 'WON' } },
+      { $group: { _id: null, total: { $sum: "$winAmount" } } }
+    ]);
+
+    const houseEdge = totalWagered[0]?.total - (totalWinnings[0]?.total || 0);
+
+    res.json({
+      totalBets,
+      totalWagered: totalWagered[0]?.total || 0,
+      redBetsPercentage: ((redBets / totalBets) * 100).toFixed(2),
+      greenBetsPercentage: ((greenBets / totalBets) * 100).toFixed(2),
+      winRate: ((wonBets / (wonBets + lostBets)) * 100).toFixed(2),
+      houseEdge: houseEdge.toFixed(2),
+      totalPayouts: totalWinnings[0]?.total || 0
+    });
+  } catch (err) {
+    console.error("Game analytics error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+app.post("/admin/user/:mobile/ban", adminAuth, async (req, res) => {
+  try {
+    const { mobile } = req.params;
+    const { banned, reason } = req.body;
+
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    user.banned = banned;
+    if (banned) {
+      user.banReason = reason || "Violation of terms";
+    }
+    await user.save();
+
+    console.log(`Admin ${banned ? 'banned' : 'unbanned'} user: ${mobile}`);
+
+    res.json({
+      message: `User ${banned ? 'banned' : 'unbanned'} successfully`,
+      user: {
+        mobile: user.mobile,
+        banned: user.banned
+      }
+    });
+  } catch (err) {
+    console.error("Ban user error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/admin/user/:mobile/adjust-balance", adminAuth, async (req, res) => {
+  try {
+    const { mobile } = req.params;
+    const { amount, type, reason } = req.body;
+
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (type === 'wallet') {
+      user.wallet = Math.max(0, Math.round((user.wallet + amount) * 100) / 100);
+    } else if (type === 'bonus') {
+      user.bonus = Math.max(0, Math.round((user.bonus + amount) * 100) / 100);
+    } else {
+      return res.status(400).json({ error: "Invalid type" });
+    }
+
+    await user.save();
+
+    console.log(`Admin adjusted ${type}: ${mobile} ${amount > 0 ? '+' : ''}₹${amount} - ${reason}`);
+
+    res.json({
+      message: "Balance adjusted successfully",
+      newWallet: user.wallet,
+      newBonus: user.bonus
+    });
+  } catch (err) {
+    console.error("Balance adjustment error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+SERVER START
+========================= */
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log('\n' + '='.repeat(50));
+  console.log('🎮 BIGWIN Backend Server');
+  console.log('='.repeat(50));
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`🌐 API URL: http://localhost:${PORT}`);
+  console.log(`📊 MongoDB: Connected`);
+  console.log(`⏰ Round Duration: 60 seconds`);
+  console.log(`🏦 House Edge: 2%`);
+  console.log(`🎁 Registration Bonus: ₹100 bonus`);
+  console.log(`💰 Referral Levels: 6 (22% total commission)`);
+  console.log('='.repeat(50) + '\n');
+});
