@@ -482,7 +482,8 @@ return;
 }
 console.log('✅ Round found in database');
 if (round.winner !== null) {
-console.log('⚠️ Round already processed with winner:', round.winner console.log(`💰 RED POOL: ₹${redPool}`);
+console.log('⚠️ Round already processed with winner:', round.winner);
+console.log(`💰 RED POOL: ₹${redPool}`);
 console.log(`💰 GREEN POOL: ₹${greenPool}`);
 console.log(`💰 TOTAL POOL: ₹${totalPool}`);
 let winner;
