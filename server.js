@@ -95,64 +95,63 @@ next();
 /* =========================
 CASHFREE WEBHOOK
 ========================= */ 
-app.post("/api/cashfree/webhook", async (req, res) => {
+app.post("/api/cashfree/webhook", express.json(), async (req, res) => {
   try {
-    console.log("✅ Cashfree Webhook Received:", JSON.stringify(req.body));
-    const eventData = req.body?.data;
-    const orderId = eventData?.order?.order_id;
-    const paymentStatus = eventData?.payment?.payment_status;
-    const paidAmount = Number(eventData?.order?.order_amount || 0);
+    // ✅ ALWAYS respond 200 first
+    res.status(200).json({ success: true });
 
-    if (!orderId) {
-      return res.status(400).send("Missing order_id");
+    const data = req.body;
+
+    console.log("📩 Cashfree Webhook:", JSON.stringify(data));
+
+    // Only process SUCCESS payments
+    if (data?.type !== "PAYMENT_SUCCESS") return;
+
+    const orderId = data.data.order.order_id;
+    const amount = Number(data.data.payment.payment_amount);
+    const mobile = data.data.customer_details.customer_id;
+
+    if (!orderId || !amount || !mobile) {
+      console.log("⚠️ Webhook missing fields");
+      return;
     }
 
-    const deposit = await Deposit.findOne({ referenceId: orderId });
-    
-    if (!deposit) {
-      console.log("⚠️ Deposit not found for order:", orderId);
-      return res.status(200).send("OK");
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      console.log("⚠️ User not found:", mobile);
+      return;
     }
 
-    if (deposit.status === "SUCCESS") {
-      return res.status(200).send("OK");
+    // Prevent double credit
+    const alreadyCredited = await Deposit.findOne({ orderId });
+    if (alreadyCredited) {
+      console.log("⚠️ Already credited:", orderId);
+      return;
     }
 
-    if (paymentStatus === "SUCCESS") {
-      const user = await User.findOne({ mobile: deposit.mobile });
-      
-      if (!user) {
-        console.log("⚠️ User not found:", deposit.mobile);
-        return res.status(200).send("OK");
-      }
+    // Save deposit
+    await Deposit.create({
+      mobile,
+      amount,
+      orderId,
+      status: "SUCCESS"
+    });
 
-      deposit.status = "SUCCESS";
-      await deposit.save();
+    // Wallet credit
+    user.wallet = Math.round((user.wallet + amount) * 100) / 100;
+    user.deposited = true;
+    user.depositAmount += amount;
 
-      const amountToAdd = paidAmount || deposit.amount;
-      user.wallet = Math.round((user.wallet + amountToAdd) * 100) / 100;
-      user.deposited = true;
-      user.depositAmount = Math.round(((user.depositAmount || 0) + amountToAdd) * 100) / 100;
-
-      const isFirstDeposit = user.depositAmount === amountToAdd;
-      if (isFirstDeposit) {
-        user.bonus = Math.round(((user.bonus || 0) + amountToAdd) * 100) / 100;
-      }
-
-      await user.save();
-      await processReferralCommission(user.mobile, amountToAdd, "DEPOSIT");
-
-      console.log(`✅ Cashfree Deposit SUCCESS: ${user.mobile} +₹${amountToAdd}`);
-    } else {
-      deposit.status = "FAILED";
-      await deposit.save();
-      console.log(`❌ Cashfree Deposit FAILED: ${orderId}`);
+    // First deposit bonus
+    if (user.depositAmount === amount) {
+      user.bonus += amount;
     }
 
-    return res.status(200).send("OK");
+    await user.save();
+
+    console.log(`✅ Deposit credited: ${mobile} ₹${amount}`);
   } catch (err) {
-    console.error("❌ Cashfree webhook error:", err);
-    return res.status(200).send("OK");
+    console.error("❌ Webhook error:", err);
   }
 });
  app.post("/api/cashfree/create-order", auth, async (req, res) => {
