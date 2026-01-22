@@ -6,6 +6,9 @@ const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const app = express();
 const { Cashfree } = require("cashfree-pg");
+Cashfree.XClientId = process.env.CASHFREE_APP_ID;
+Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
+Cashfree.Environment = "PRODUCTION";
 /* =========================
 MODELS
 ========================= */
