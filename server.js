@@ -5,11 +5,98 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const app = express();
+app.use(express.json());
+// Add this after requiring Cashfree
 const { Cashfree } = require("cashfree-pg");
+
+// Set credentials
 Cashfree.XClientId = process.env.CASHFREE_APP_ID;
 Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
-Cashfree.Environment = "PRODUCTION";
-app.use(express.json());
+
+// IMPORTANT: Set environment based on your credentials
+// If using PRODUCTION credentials (cfsk_ma_prod_...), set to PROD
+// If using SANDBOX credentials (cfsk_ma_test_...), set to SANDBOX
+Cashfree.XEnvironment = Cashfree.Environment.PRODUCTION;
+// OR for testing:
+// Cashfree.XEnvironment = Cashfree.Environment.SANDBOX;
+
+/* =========================
+CREATE CASHFREE ORDER - FIXED
+========================= */
+app.post("/api/cashfree/create-order", auth, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    
+    if (!amount || Number(amount) < 10) {
+      return res.status(400).json({ message: "Minimum deposit ₹10" });
+    }
+    
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    const orderId = `ORDER_${Date.now()}`;
+    
+    const request = {
+      order_amount: Number(amount),
+      order_currency: "INR",
+      order_id: orderId,
+      customer_details: {
+        customer_id: user.mobile,
+        customer_phone: user.mobile,
+        customer_email: user.email || `${user.mobile}@bigwin.com`,
+      },
+      order_meta: {
+        return_url: `${process.env.FRONTEND_URL || 'https://yourapp.com'}/payment/callback?order_id={order_id}`,
+        notify_url: `${process.env.BACKEND_URL || 'https://your-backend.onrender.com'}/api/cashfree/webhook`
+      }
+    };
+    
+    console.log('📝 Creating Cashfree order:', {
+      orderId,
+      amount,
+      environment: Cashfree.XEnvironment
+    });
+    
+    // Create order with proper error handling
+    const response = await Cashfree.PGCreateOrder("2023-08-01", request);
+    
+    // Save deposit record
+    await Deposit.create({
+      mobile: user.mobile,
+      amount: Number(amount),
+      method: "cashfree",
+      referenceId: orderId,
+      status: "PENDING",
+    });
+    
+    console.log('✅ Cashfree order created:', orderId);
+    
+    return res.json({
+      success: true,
+      orderId,
+      payment_session_id: response.data.payment_session_id,
+      order_status: response.data.order_status
+    });
+    
+  } catch (err) {
+    console.error("❌ Cashfree error:", err);
+    
+    // Detailed error logging
+    if (err.response) {
+      console.error("Response status:", err.response.status);
+      console.error("Response data:", err.response.data);
+    }
+    
+    return res.status(500).json({
+      success: false,
+      message: "Payment gateway error",
+      error: err?.response?.data?.message || err?.message || "Unknown error",
+      details: process.env.NODE_ENV === 'development' ? err?.response?.data : undefined
+    });
+  }
+});
 /* =========================
 MODELS
 ========================= */
@@ -40,9 +127,6 @@ next();
 return res.status(401).json({ error: "Invalid admin token" });
 }
 }
-Cashfree.XClientId = process.env.CASHFREE_APP_ID;
-Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
-
 const COMMISSION_RATES = {
   1: 0.10, // 10%
   2: 0.05, // 5%
@@ -92,113 +176,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use((req, res, next) => {
 console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
 next();
-});
-/* =========================
-CASHFREE WEBHOOK
-========================= */ 
-app.post("/api/cashfree/webhook", express.json(), async (req, res) => {
-  try {
-    // ✅ ALWAYS respond 200 first
-    res.status(200).json({ success: true });
-
-    const data = req.body;
-
-    console.log("📩 Cashfree Webhook:", JSON.stringify(data));
-
-    // Only process SUCCESS payments
-    if (data?.type !== "PAYMENT_SUCCESS") return;
-
-    const orderId = data.data.order.order_id;
-    const amount = Number(data.data.payment.payment_amount);
-    const mobile = data.data.customer_details.customer_id;
-
-    if (!orderId || !amount || !mobile) {
-      console.log("⚠️ Webhook missing fields");
-      return;
-    }
-
-    const user = await User.findOne({ mobile });
-    if (!user) {
-      console.log("⚠️ User not found:", mobile);
-      return;
-    }
-
-    // Prevent double credit
-    const alreadyCredited = await Deposit.findOne({ orderId });
-    if (alreadyCredited) {
-      console.log("⚠️ Already credited:", orderId);
-      return;
-    }
-
-    // Save deposit
-    await Deposit.create({
-      mobile,
-      amount,
-      orderId,
-      status: "SUCCESS"
-    });
-
-    // Wallet credit
-    user.wallet = Math.round((user.wallet + amount) * 100) / 100;
-    user.deposited = true;
-    user.depositAmount += amount;
-
-    // First deposit bonus
-    if (user.depositAmount === amount) {
-      user.bonus += amount;
-    }
-
-    await user.save();
-
-    console.log(`✅ Deposit credited: ${mobile} ₹${amount}`);
-  } catch (err) {
-    console.error("❌ Webhook error:", err);
-  }
-});
- app.post("/api/cashfree/create-order", auth, async (req, res) => {
-try {
-const { amount } = req.body;
-if (!amount || amount < 100) {
-  return res.status(400).json({ error: "Minimum deposit is 100" });
-}
-const user = await User.findOne({ mobile: req.user.mobile });
-if (!user) return res.status(404).json({ message: "User not found" });
-const orderId = `ORDER_${Date.now()}`;
-const request = {
-  order_id: orderId,
-  order_amount: amount,
-  order_currency: "INR",
-
-  customer_details: {
-    customer_id: user.mobile,
-    customer_phone: user.mobile,
-    customer_email: `${user.mobile}@bigwin.in`
-  },
-
-  order_meta: {
-    notify_url: "https://color-game-backend1.onrender.com/api/cashfree/webhook",
-    return_url: "https://color-game-frontend.pages.dev/wallet"
-  }
-};
-const response = await Cashfree.PGCreateOrder("2023-08-01", request);
-await Deposit.create({
-mobile: user.mobile,
-amount: Number(amount),
-method: "cashfree",
-referenceId: orderId,
-status: "PENDING",
-});
-return res.json({
-orderId,
-payment_session_id: response.data.payment_session_id,
-});
-} catch (err) {
-console.error("Cashfree error:", err);
-return res.status(500).json({
-message: "Cashfree order create failed",
-error: err?.response?.data || err?.message || "Unknown error"
-});
-}
 });
 /* =========================
 ROUND STATE
