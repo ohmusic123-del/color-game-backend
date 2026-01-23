@@ -185,45 +185,179 @@ app.post("/api/cashfree/webhook", async (req, res) => {
 });
 
 /* =========================
-CREATE CASHFREE ORDER
+CREATE CASHFREE ORDER - ENHANCED WITH DEBUGGING
 ========================= */
 app.post("/api/cashfree/create-order", auth, async (req, res) => {
   try {
     const { amount } = req.body;
     
+    // Validate amount
     if (!amount || Number(amount) < 10) {
-      return res.status(400).json({ message: "Minimum deposit ₹10" });
+      return res.status(400).json({ 
+        success: false,
+        message: "Minimum deposit ₹10" 
+      });
     }
     
+    // Find user
     const user = await User.findOne({ mobile: req.user.mobile });
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
     }
     
-    const orderId = `ORDER_${Date.now()}`;
+    // Generate unique order ID
+    const orderId = `ORDER_${Date.now()}_${user.mobile.slice(-4)}`;
     
-    const request = {
+    // Prepare order request
+    const orderRequest = {
       order_amount: Number(amount),
       order_currency: "INR",
       order_id: orderId,
       customer_details: {
         customer_id: user.mobile,
         customer_phone: user.mobile,
-        customer_email: user.email || `${user.mobile}@bigwin.com`,
-      },
-      order_meta: {
-        return_url: `${process.env.FRONTEND_URL || 'https://yourapp.com'}/payment/callback?order_id={order_id}`,
-        notify_url: `${process.env.BACKEND_URL || 'https://your-backend.onrender.com'}/api/cashfree/webhook`
+        customer_email: user.email || `user${user.mobile}@bigwin.in`,
+        customer_name: user.name || `User ${user.mobile.slice(-4)}`
       }
     };
     
-    console.log('📝 Creating Cashfree order:', {
-      orderId,
-      amount,
-      environment: Cashfree.XEnvironment
+    console.log('📝 Creating Cashfree order...');
+    console.log('Order Request:', JSON.stringify(orderRequest, null, 2));
+    console.log('Environment:', Cashfree.XEnvironment);
+    console.log('Client ID:', Cashfree.XClientId ? 'Set ✅' : 'Missing ❌');
+    console.log('Client Secret:', Cashfree.XClientSecret ? 'Set ✅' : 'Missing ❌');
+    
+    // Create order with Cashfree
+    const response = await Cashfree.PGCreateOrder("2023-08-01", orderRequest);
+    
+    console.log('Cashfree Response:', JSON.stringify(response.data, null, 2));
+    
+    // Check if payment_session_id exists
+    if (!response.data || !response.data.payment_session_id) {
+      console.error('❌ No payment_session_id in response:', response.data);
+      return res.status(500).json({
+        success: false,
+        message: "Payment gateway error - no session ID",
+        error: "Invalid response from payment gateway"
+      });
+    }
+    
+    // Save deposit record
+    const deposit = await Deposit.create({
+      mobile: user.mobile,
+      amount: Number(amount),
+      method: "cashfree",
+      referenceId: orderId,
+      status: "PENDING",
     });
     
-    const response = await Cashfree.PGCreateOrder("2023-08-01", request);
+    console.log(`✅ Cashfree order created: ${orderId}`);
+    console.log(`💾 Deposit record saved: ${deposit._id}`);
+    
+    // Return successful response
+    return res.json({
+      success: true,
+      orderId: orderId,
+      payment_session_id: response.data.payment_session_id,
+      order_status: response.data.order_status || 'ACTIVE',
+      order_token: response.data.order_token,
+      amount: Number(amount)
+    });
+    
+  } catch (err) {
+    console.error("❌ Cashfree Error Details:");
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    
+    // Log response details if available
+    if (err.response) {
+      console.error("Response Status:", err.response.status);
+      console.error("Response Headers:", err.response.headers);
+      console.error("Response Data:", JSON.stringify(err.response.data, null, 2));
+    }
+    
+    // Check for specific error types
+    let errorMessage = "Payment gateway error";
+    let errorDetails = err.message;
+    
+    if (err.response?.status === 401) {
+      errorMessage = "Payment gateway authentication failed";
+      errorDetails = "Invalid credentials. Please contact support.";
+      console.error("🔑 Authentication Error - Check your CASHFREE_APP_ID and CASHFREE_SECRET_KEY");
+    } else if (err.response?.status === 400) {
+      errorMessage = "Invalid payment request";
+      errorDetails = err.response.data?.message || "Invalid order details";
+    }
+    
+    return res.status(500).json({
+      success: false,
+      message: errorMessage,
+      error: errorDetails,
+      details: process.env.NODE_ENV === 'development' ? {
+        response: err.response?.data,
+        status: err.response?.status
+      } : undefined
+    });
+  }
+});
+
+/* =========================
+ALTERNATIVE: Manual Cashfree API Call (if SDK fails)
+========================= */
+app.post("/api/cashfree/create-order-manual", auth, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    
+    if (!amount || Number(amount) < 10) {
+      return res.status(400).json({ success: false, message: "Minimum deposit ₹10" });
+    }
+    
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    
+    const orderId = `ORDER_${Date.now()}_${user.mobile.slice(-4)}`;
+    
+    // Manual API call using fetch/axios
+    const axios = require('axios');
+    
+    const cashfreeUrl = process.env.CASHFREE_ENV === 'SANDBOX' 
+      ? 'https://sandbox.cashfree.com/pg/orders'
+      : 'https://api.cashfree.com/pg/orders';
+    
+    const orderData = {
+      order_amount: Number(amount),
+      order_currency: "INR",
+      order_id: orderId,
+      customer_details: {
+        customer_id: user.mobile,
+        customer_phone: user.mobile,
+        customer_email: `user${user.mobile}@bigwin.in`
+      }
+    };
+    
+    console.log('📝 Creating order via manual API call...');
+    console.log('URL:', cashfreeUrl);
+    console.log('Data:', orderData);
+    
+    const response = await axios.post(cashfreeUrl, orderData, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-client-id': process.env.CASHFREE_APP_ID,
+        'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+        'x-api-version': '2023-08-01'
+      }
+    });
+    
+    console.log('Response:', response.data);
+    
+    if (!response.data.payment_session_id) {
+      throw new Error('No payment_session_id received');
+    }
     
     await Deposit.create({
       mobile: user.mobile,
@@ -233,31 +367,22 @@ app.post("/api/cashfree/create-order", auth, async (req, res) => {
       status: "PENDING",
     });
     
-    console.log('✅ Cashfree order created:', orderId);
-    
     return res.json({
       success: true,
-      orderId,
+      orderId: orderId,
       payment_session_id: response.data.payment_session_id,
       order_status: response.data.order_status
     });
     
   } catch (err) {
-    console.error("❌ Cashfree error:", err);
-    
-    if (err.response) {
-      console.error("Response status:", err.response.status);
-      console.error("Response data:", err.response.data);
-    }
-    
+    console.error("Manual API Error:", err.response?.data || err.message);
     return res.status(500).json({
       success: false,
       message: "Payment gateway error",
-      error: err?.response?.data?.message || err?.message || "Unknown error"
+      error: err.response?.data || err.message
     });
   }
 });
-
 /* NOW THE REST OF YOUR ROUTES... */
 /* =========================
 BASIC
