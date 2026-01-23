@@ -429,7 +429,7 @@ const newUser = new User({
   mobile,
 password,
 wallet: 0,
-bonus: 100,
+bonus: 50,
 deposited: false,
 depositAmount: 0,
 totalWagered: 0,
