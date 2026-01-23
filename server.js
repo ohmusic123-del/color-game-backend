@@ -4,24 +4,188 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
-const app = express();
-app.use(express.json());
-// Add this after requiring Cashfree
 const { Cashfree } = require("cashfree-pg");
 
-// Set credentials
-Cashfree.XClientId = process.env.CASHFREE_APP_ID;
-Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
-
-// IMPORTANT: Set environment based on your credentials
-// If using PRODUCTION credentials (cfsk_ma_prod_...), set to PROD
-// If using SANDBOX credentials (cfsk_ma_test_...), set to SANDBOX
-Cashfree.XEnvironment = Cashfree.Environment.PRODUCTION;
-// OR for testing:
-// Cashfree.XEnvironment = Cashfree.Environment.SANDBOX;
+const app = express();
 
 /* =========================
-CREATE CASHFREE ORDER - FIXED
+MODELS - MUST BE BEFORE ROUTES
+========================= */
+const User = require("./models/User");
+const Bet = require("./models/Bet");
+const Round = require("./models/Round");
+const Withdraw = require("./models/Withdraw");
+const Deposit = require("./models/Deposit");
+const Referral = require("./models/Referral");
+
+/* =========================
+MIDDLEWARE - MUST BE BEFORE ROUTES
+========================= */
+const auth = require("./middleware/auth");
+
+/* =========================
+APP SETUP
+========================= */
+app.use(cors());
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
+
+/* =========================
+ADMIN AUTH MIDDLEWARE
+========================= */
+function adminAuth(req, res, next) {
+  try {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) {
+      return res.status(401).json({ error: "Admin token missing" });
+    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role !== "admin") {
+      return res.status(403).json({ error: "Admin access denied" });
+    }
+    req.admin = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid admin token" });
+  }
+}
+
+/* =========================
+CASHFREE CONFIGURATION
+========================= */
+Cashfree.XClientId = process.env.CASHFREE_APP_ID;
+Cashfree.XClientSecret = process.env.CASHFREE_SECRET_KEY;
+Cashfree.XEnvironment = Cashfree.Environment.PRODUCTION;
+
+/* =========================
+CONSTANTS
+========================= */
+const COMMISSION_RATES = {
+  1: 0.10, // 10%
+  2: 0.05, // 5%
+  3: 0.03, // 3%
+  4: 0.02, // 2%
+  5: 0.01, // 1%
+  6: 0.01  // 1%
+};
+
+/* =========================
+PROCESS REFERRAL COMMISSION
+========================= */
+async function processReferralCommission(userId, amount, type) {
+  try {
+    const user = await User.findOne({ mobile: userId });
+    if (!user || !user.referredBy) return;
+    
+    let currentReferrer = user.referredBy;
+    let level = 1;
+    
+    while (currentReferrer && level <= 6) {
+      const referrer = await User.findOne({ referralCode: currentReferrer });
+      if (!referrer) break;
+      
+      const commission = Math.round(amount * COMMISSION_RATES[level] * 100) / 100;
+      referrer.wallet = Math.round((referrer.wallet + commission) * 100) / 100;
+      referrer.referralEarnings = Math.round((referrer.referralEarnings + commission) * 100) / 100;
+      await referrer.save();
+      
+      await Referral.create({
+        userId: referrer.mobile,
+        referredUserId: userId,
+        level,
+        commission,
+        type,
+        amount
+      });
+      
+      console.log(`💰 Level ${level} commission: ₹${commission} to ${referrer.mobile}`);
+      
+      currentReferrer = referrer.referredBy;
+      level++;
+    }
+  } catch (err) {
+    console.error("Referral commission error:", err);
+  }
+}
+
+/* =========================
+ROUND STATE
+========================= */
+let CURRENT_ROUND = {
+  id: Date.now().toString(),
+  startTime: Date.now()
+};
+
+/* =========================
+CASHFREE WEBHOOK
+========================= */ 
+app.post("/api/cashfree/webhook", async (req, res) => {
+  try {
+    console.log("✅ Cashfree Webhook Received:", JSON.stringify(req.body));
+    const eventData = req.body?.data;
+    const orderId = eventData?.order?.order_id;
+    const paymentStatus = eventData?.payment?.payment_status;
+    const paidAmount = Number(eventData?.order?.order_amount || 0);
+
+    if (!orderId) {
+      return res.status(400).send("Missing order_id");
+    }
+
+    const deposit = await Deposit.findOne({ referenceId: orderId });
+    
+    if (!deposit) {
+      console.log("⚠️ Deposit not found for order:", orderId);
+      return res.status(200).send("OK");
+    }
+
+    if (deposit.status === "SUCCESS") {
+      return res.status(200).send("OK");
+    }
+
+    if (paymentStatus === "SUCCESS") {
+      const user = await User.findOne({ mobile: deposit.mobile });
+      
+      if (!user) {
+        console.log("⚠️ User not found:", deposit.mobile);
+        return res.status(200).send("OK");
+      }
+
+      deposit.status = "SUCCESS";
+      await deposit.save();
+
+      const amountToAdd = paidAmount || deposit.amount;
+      user.wallet = Math.round((user.wallet + amountToAdd) * 100) / 100;
+      user.deposited = true;
+      user.depositAmount = Math.round(((user.depositAmount || 0) + amountToAdd) * 100) / 100;
+
+      const isFirstDeposit = user.depositAmount === amountToAdd;
+      if (isFirstDeposit) {
+        user.bonus = Math.round(((user.bonus || 0) + amountToAdd) * 100) / 100;
+      }
+
+      await user.save();
+      await processReferralCommission(user.mobile, amountToAdd, "DEPOSIT");
+
+      console.log(`✅ Cashfree Deposit SUCCESS: ${user.mobile} +₹${amountToAdd}`);
+    } else {
+      deposit.status = "FAILED";
+      await deposit.save();
+      console.log(`❌ Cashfree Deposit FAILED: ${orderId}`);
+    }
+
+    return res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ Cashfree webhook error:", err);
+    return res.status(200).send("OK");
+  }
+});
+
+/* =========================
+CREATE CASHFREE ORDER
 ========================= */
 app.post("/api/cashfree/create-order", auth, async (req, res) => {
   try {
@@ -59,10 +223,8 @@ app.post("/api/cashfree/create-order", auth, async (req, res) => {
       environment: Cashfree.XEnvironment
     });
     
-    // Create order with proper error handling
     const response = await Cashfree.PGCreateOrder("2023-08-01", request);
     
-    // Save deposit record
     await Deposit.create({
       mobile: user.mobile,
       amount: Number(amount),
@@ -83,7 +245,6 @@ app.post("/api/cashfree/create-order", auth, async (req, res) => {
   } catch (err) {
     console.error("❌ Cashfree error:", err);
     
-    // Detailed error logging
     if (err.response) {
       console.error("Response status:", err.response.status);
       console.error("Response data:", err.response.data);
@@ -92,101 +253,16 @@ app.post("/api/cashfree/create-order", auth, async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Payment gateway error",
-      error: err?.response?.data?.message || err?.message || "Unknown error",
-      details: process.env.NODE_ENV === 'development' ? err?.response?.data : undefined
+      error: err?.response?.data?.message || err?.message || "Unknown error"
     });
   }
 });
-/* =========================
-MODELS
-========================= */
-const User = require("./models/User");
-const Bet = require("./models/Bet");
-const Round = require("./models/Round");
-const Withdraw = require("./models/Withdraw");
-const Deposit = require("./models/Deposit");
-const Referral = require("./models/Referral");
-/* =========================
-MIDDLEWARE
-========================= */
-const auth = require("./middleware/auth");
-/* ---------- Admin Auth ---------- */
-function adminAuth(req, res, next) {
-try {
-const token = req.headers.authorization?.replace("Bearer ", "");
-if (!token) {
-return res.status(401).json({ error: "Admin token missing" });
-}
-const decoded = jwt.verify(token, process.env.JWT_SECRET);
-if (decoded.role !== "admin") {
-return res.status(403).json({ error: "Admin access denied" });
-}
-req.admin = decoded;
-next();
-} catch (err) {
-return res.status(401).json({ error: "Invalid admin token" });
-}
-}
-const COMMISSION_RATES = {
-  1: 0.10, // 10%
-  2: 0.05, // 5%
-  3: 0.03, // 3%
-  4: 0.02, // 2%
-  5: 0.01, // 1%
-  6: 0.01  // 1%
-};
-/* =========================
-PROCESS REFERRAL COMMISSION
-========================= */
-async function processReferralCommission(userId, amount, type) {
-try {
-const user = await User.findOne({ mobile: userId });
-if (!user || !user.referredBy) return;
-let currentReferrer = user.referredBy;
-let level = 1;
-while (currentReferrer && level <= 6) {
-const referrer = await User.findOne({ referralCode: currentReferrer });
-if (!referrer) break;
-const commission = Math.round(amount * COMMISSION_RATES[level] * 100) / 100;
-referrer.wallet = Math.round((referrer.wallet + commission) * 100) / 100;
-referrer.referralEarnings = Math.round((referrer.referralEarnings + commission) * 100) / 100;
-await referrer.save();
-await Referral.create({
-userId: referrer.mobile,
-referredUserId: userId,
-level,
-commission,
-type,
-amount
-});
-console.log(`💰 Level ${level} commission: ₹${commission} to ${referrer.mobile}`);
-currentReferrer = referrer.referredBy;
-level++;
-}
-} catch (err) {
-console.error("Referral commission error:", err);
-}
-}
-/* =========================
-APP SETUP
-========================= */
-app.use(cors());
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use((req, res, next) => {
-console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-next();
-});
-/* =========================
-ROUND STATE
-========================= */
-let CURRENT_ROUND = {
-id: Date.now().toString(),
-startTime: Date.now()
-};
+
+/* NOW THE REST OF YOUR ROUTES... */
 /* =========================
 BASIC
 ========================= */
+app.use(express.json());
 app.get("/", (req, res) => {
 res.send("BIGWIN backend running - All systems operational ✅");
 }); /* =========================
