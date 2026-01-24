@@ -147,7 +147,18 @@ let CURRENT_ROUND = {
     id: null,
     startTime: Date.now()
 };
-
+app.get("/round/current", async (req, res) => {
+  try {
+    // Return the current round info
+    res.json({
+      id: CURRENT_ROUND.id,
+      startTime: CURRENT_ROUND.startTime
+    });
+  } catch (err) {
+    console.error("Current round error:", err);
+    res.status(500).json({ error: "Failed to get current round" });
+  }
+});
 /* =========================
 CASHFREE WEBHOOK
 ========================= */ 
