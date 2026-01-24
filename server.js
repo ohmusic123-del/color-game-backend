@@ -882,24 +882,21 @@ INITIALIZE FIRST ROUND - REPLACE ENTIRE SECTION
 /* =========================
 ROUND INFO
 ========================= */
-app.get("/round/current", (req, res) => {
-const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
-res.json({
-...CURRENT_ROUND,
-elapsed,
-remaining: Math.max(0, 60 - elapsed)
-});
-}); app.get("/rounds/history", async (req, res) => {
-try {
-const rounds = await Round.find()
-.sort({ createdAt: -1 })
-.limit(20)
-.select("roundId winner redPool greenPool createdAt");
-  res.json(rounds);
-} catch (err) {
-console.error("Rounds history error:", err);
-res.status(500).json({ error: "Failed to load rounds" });
-}
+app.get("/rounds/history", async (req, res) => {
+    try {
+        const rounds = await Round.find()
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .select("roundId winner redPool greenPool createdAt")
+            .lean(); // Add .lean() for better performance
+        
+        console.log('📊 Returning round history:', rounds.length, 'rounds');
+        
+        res.json(rounds);
+    } catch (err) {
+        console.error("Rounds history error:", err);
+        res.status(500).json({ error: "Failed to load rounds" });
+    }
 });
 /* =========================
 DEPOSIT
