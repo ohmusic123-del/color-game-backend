@@ -5,7 +5,6 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const { Cashfree } = require("cashfree-pg");
-const monitorRoutes = require("./routes/monitor");
 
 const app = express();
 
@@ -19,18 +18,408 @@ const Withdraw = require("./models/Withdraw");
 const Deposit = require("./models/Deposit");
 const Referral = require("./models/Referral");
 
+// MonitorUser Model
+const monitorUserSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    displayName: String,
+    active: { type: Boolean, default: true },
+    totalLogins: { type: Number, default: 0 },
+    lastLogin: Date,
+    createdAt: { type: Date, default: Date.now },
+    createdBy: String // Admin username who created this
+});
+
+const MonitorUser = mongoose.model('MonitorUser', monitorUserSchema);
+
+// MonitorActivity Model
+const monitorActivitySchema = new mongoose.Schema({
+    username: String,
+    action: String, // 'LOGIN', 'LOGOUT', 'VIEW_BETS'
+    ipAddress: String,
+    timestamp: { type: Date, default: Date.now }
+});
+
+const MonitorActivity = mongoose.model('MonitorActivity', monitorActivitySchema);
+
+
 /* =========================
 MIDDLEWARE - MUST BE BEFORE ROUTES
 ========================= */
 const auth = require("./middleware/auth");
 
+// Authenticate Monitor User
+const authenticateMonitor = async (req, res, next) => {
+    try {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const monitor = await MonitorUser.findOne({ 
+            username: decoded.username,
+            active: true 
+        });
+
+        if (!monitor) {
+            return res.status(401).json({ error: 'Invalid or inactive monitor user' });
+        }
+
+        req.monitor = monitor;
+        next();
+    } catch (err) {
+        res.status(401).json({ error: 'Invalid or expired token' });
+    }
+};
+
+// Authenticate Admin (reuse your existing admin auth)
+const authenticateAdmin = async (req, res, next) => {
+    try {
+        const token = req.headers.authorization;
+        if (!token) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const admin = await Admin.findOne({ username: decoded.username });
+
+        if (!admin) {
+            return res.status(401).json({ error: 'Invalid admin' });
+        }
+
+        req.admin = admin;
+        next();
+    } catch (err) {
+        res.status(401).json({ error: 'Invalid or expired token' });
+    }
+};
+
+// ============================================
+// MONITOR LOGIN & AUTHENTICATION
+// ============================================
+
+// Monitor Login
+router.post('/monitor/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+
+        const monitor = await MonitorUser.findOne({ username });
+        if (!monitor || !monitor.active) {
+            return res.status(401).json({ error: 'Invalid credentials or account disabled' });
+        }
+
+        const isValid = await bcrypt.compare(password, monitor.password);
+        if (!isValid) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        // Update login stats
+        monitor.totalLogins += 1;
+        monitor.lastLogin = new Date();
+        await monitor.save();
+
+        // Log activity
+        await MonitorActivity.create({
+            username: monitor.username,
+            action: 'LOGIN',
+            ipAddress: req.ip
+        });
+
+        // Generate token
+        const token = jwt.sign(
+            { username: monitor.username, role: 'monitor' },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.json({
+            success: true,
+            token,
+            user: {
+                username: monitor.username,
+                displayName: monitor.displayName
+            }
+        });
+    } catch (err) {
+        console.error('Monitor login error:', err);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+// ============================================
+// LIVE BETTING MONITOR ENDPOINTS
+// ============================================
+
+// Get Live Bets for Current Round
+router.get('/monitor/live-bets', authenticateMonitor, async (req, res) => {
+    try {
+        // Get current active round
+        const currentRound = await Round.findOne({ status: 'ACTIVE' });
+        
+        if (!currentRound) {
+            return res.json({ red: [], green: [] });
+        }
+
+        // Get all pending bets for this round
+        const bets = await Bet.find({
+            roundId: currentRound.id,
+            status: 'PENDING'
+        })
+        .populate('userId', 'mobile')
+        .sort({ createdAt: -1 })
+        .limit(100); // Limit to last 100 bets for performance
+
+        // Separate by color
+        const redBets = bets
+            .filter(bet => bet.color === 'red')
+            .map(bet => ({
+                id: bet._id,
+                mobile: bet.userId?.mobile || 'Unknown',
+                amount: bet.amount,
+                time: bet.createdAt
+            }));
+              
+// Log activity (optional, for tracking)
+        await MonitorActivity.create({
+            username: req.monitor.username,
+            action: 'VIEW_BETS',
+            ipAddress: req.ip
+        });
+
+        res.json({ red: redBets, green: greenBets });
+    } catch (err) {
+        console.error('Live bets error:', err);
+        res.status(500).json({ error: 'Failed to fetch live bets' });
+    }
+});
+
+// Get Current Round Stats
+router.get('/monitor/round-stats', authenticateMonitor, async (req, res) => {
+    try {
+        const currentRound = await Round.findOne({ status: 'ACTIVE' });
+        
+        if (!currentRound) {
+            return res.json({
+                redTotal: 0,
+                greenTotal: 0,
+                redBets: 0,
+                greenBets: 0,
+                totalPlayers: 0,
+                potentialPayout: 0
+            });
+        }
+
+        const bets = await Bet.find({
+            roundId: currentRound.id,
+            status: 'PENDING'
+        });
+
+        const redBets = bets.filter(b => b.color === 'red');
+        const greenBets = bets.filter(b => b.color === 'green');
+
+        const redTotal = redBets.reduce((sum, b) => sum + b.amount, 0);
+        const greenTotal = greenBets.reduce((sum, b) => sum + b.amount, 0);
+
+        // Get unique players
+        const uniquePlayers = new Set(bets.map(b => b.userId.toString())).size;
+
+        res.json({
+            redTotal,
+            greenTotal,
+            redBets: redBets.length,
+            greenBets: greenBets.length,
+            totalPlayers: uniquePlayers,
+            potentialPayout: Math.max(redTotal * 1.96, greenTotal * 1.96)
+        });
+    } catch (err) {
+        console.error('Round stats error:', err);
+        res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+});
+
+// ============================================
+// ADMIN ENDPOINTS - MONITOR USER MANAGEMENT
+// ============================================
+
+// Get All Monitor Users
+router.get('/admin/monitor-users', authenticateAdmin, async (req, res) => {
+    try {
+        const monitors = await MonitorUser.find()
+            .select('-password')
+            .sort({ createdAt: -1 });
+
+        res.json(monitors);
+    } catch (err) {
+        console.error('Get monitors error:', err);
+        res.status(500).json({ error: 'Failed to fetch monitor users' });
+    }
+});
+
+// Create Monitor User
+router.post('/admin/monitor-user', authenticateAdmin, async (req, res) => {
+    try {
+        const { username, password, displayName } = req.body;
+
+        // Validate
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+
+        // Check if username exists
+        const existing = await MonitorUser.findOne({ username });
+        if (existing) {
+            return res.status(400).json({ error: 'Username already exists' });
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create monitor user
+        const monitor = await MonitorUser.create({
+            username,
+            password: hashedPassword,
+            displayName: displayName || username,
+            createdBy: req.admin.username
+        });
+
+        // Log activity
+        await MonitorActivity.create({
+            username: req.admin.username,
+            action: `CREATED monitor user: ${username}`,
+            ipAddress: req.ip
+        });
+
+        res.json({
+            success: true,
+            monitor: {
+                _id: monitor._id,
+                username: monitor.username,
+                displayName: monitor.displayName
+            }
+        });
+    } catch (err) {
+        console.error('Create monitor error:', err);
+        res.status(500).json({ error: 'Failed to create monitor user' });
+    }
+});
+
+// Update Monitor User
+router.put('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const { username, password, displayName } = req.body;
+
+        const monitor = await MonitorUser.findById(req.params.id);
+        if (!monitor) {
+            return res.status(404).json({ error: 'Monitor user not found' });
+        }
+
+        // Update fields
+        if (username) monitor.username = username;
+        if (displayName) monitor.displayName = displayName;
+        if (password) {
+            monitor.password = await bcrypt.hash(password, 10);
+        }
+
+        await monitor.save();
+
+        // Log activity
+        await MonitorActivity.create({
+            username: req.admin.username,
+            action: `UPDATED monitor user: ${monitor.username}`,
+            ipAddress: req.ip
+        });
+
+        res.json({ success: true, monitor });
+    } catch (err) {
+        console.error('Update monitor error:', err);
+        res.status(500).json({ error: 'Failed to update monitor user' });
+    }
+});
+
+// Toggle Monitor User Active Status
+router.post('/admin/monitor-user/:id/toggle', authenticateAdmin, async (req, res) => {
+    try {
+        const { active } = req.body;
+
+        const monitor = await MonitorUser.findById(req.params.id);
+        if (!monitor) {
+            return res.status(404).json({ error: 'Monitor user not found' });
+        }
+
+        monitor.active = active;
+        await monitor.save();
+
+        // Log activity
+        await MonitorActivity.create({
+            username: req.admin.username,
+            action: `${active ? 'ENABLED' : 'DISABLED'} monitor user: ${monitor.username}`,
+            ipAddress: req.ip
+        });
+
+        res.json({ success: true, monitor });
+    } catch (err) {
+        console.error('Toggle monitor error:', err);
+        res.status(500).json({ error: 'Failed to toggle monitor user' });
+    }
+});
+
+// Delete Monitor User
+router.delete('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const monitor = await MonitorUser.findById(req.params.id);
+        if (!monitor) {
+            return res.status(404).json({ error: 'Monitor user not found' });
+        }
+
+        const username = monitor.username;
+        await monitor.deleteOne();
+
+        // Log activity
+        await MonitorActivity.create({
+            username: req.admin.username,
+            action: `DELETED monitor user: ${username}`,
+            ipAddress: req.ip
+        });
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Delete monitor error:', err);
+        res.status(500).json({ error: 'Failed to delete monitor user' });
+    }
+});
+
+// Get Monitor Activity Log
+router.get('/admin/monitor-activity', authenticateAdmin, async (req, res) => {
+    try {
+        const activities = await MonitorActivity.find()
+            .sort({ timestamp: -1 })
+            .limit(50);
+
+        res.json(activities);
+    } catch (err) {
+        console.error('Activity log error:', err);
+        res.status(500).json({ error: 'Failed to fetch activity log' });
+    }
+});
+
+// ============================================
+// EXPORT ROUTER
+// ============================================
+
+module.exports = router;
+
+// ============================================
+// USAGE IN YOUR MAIN SERVER FILE
+// ============================================
+// const monitorRoutes = require('./routes/monitor');
+// app.use('/api', monitorRoutes);
 /* =========================
 APP SETUP
 ========================= */
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use("/api", monitorRoutes);
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   next();
