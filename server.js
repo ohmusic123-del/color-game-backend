@@ -72,7 +72,34 @@ const COMMISSION_RATES = {
   5: 0.01, // 1%
   6: 0.01  // 1%
 };
+/* =========================
+SEQUENTIAL ROUND ID GENERATOR - ADD THIS
+========================= */
+let CURRENT_ROUND_NUMBER = null;
 
+async function getNextRoundId() {
+    try {
+        if (CURRENT_ROUND_NUMBER === null) {
+            const latestRound = await Round.findOne()
+                .sort({ createdAt: -1 })
+                .select('roundId');
+            
+            if (latestRound && latestRound.roundId) {
+                const lastNumber = parseInt(latestRound.roundId);
+                CURRENT_ROUND_NUMBER = lastNumber + 1;
+            } else {
+                CURRENT_ROUND_NUMBER = 100000;
+            }
+        } else {
+            CURRENT_ROUND_NUMBER++;
+        }
+        
+        return CURRENT_ROUND_NUMBER.toString();
+    } catch (err) {
+        console.error('Error getting next round ID:', err);
+        return Date.now().toString();
+    }
+}
 /* =========================
 PROCESS REFERRAL COMMISSION
 ========================= */
@@ -115,9 +142,10 @@ async function processReferralCommission(userId, amount, type) {
 /* =========================
 ROUND STATE
 ========================= */
+/* NEW CODE - USE THIS: */
 let CURRENT_ROUND = {
-  id: Date.now().toString(),
-  startTime: Date.now()
+    id: null,
+    startTime: Date.now()
 };
 
 /* =========================
