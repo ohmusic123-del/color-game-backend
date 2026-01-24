@@ -8,7 +8,8 @@ const { Cashfree } = require("cashfree-pg");
 const bcrypt = require("bcryptjs");
 
 const app = express();
-
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 /* =========================
 MODELS - MUST BE BEFORE ROUTES
 ========================= */
