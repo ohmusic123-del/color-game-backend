@@ -795,40 +795,43 @@ session.endSession();
 console.error('❌ Transaction aborted due to error\n');
 }
 }
-/* =========================
-MODIFIED ROUND TIMER - WITH SEQUENTIAL IDS
-========================= */
 setInterval(async () => {
     const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
     
     if (elapsed >= 60) {
-        console.log('\n⏰ Round timer reached 60 seconds - Ending round...');
+        console.log('\n⏰ Round timer reached 60 seconds');
         console.log(`📊 Closing Round ID: ${CURRENT_ROUND.id}`);
         
         // Process the current round
         await processRoundEnd(CURRENT_ROUND.id);
         
-        // Get next sequential round ID
+        // Get next round ID
         const newRoundId = await getNextRoundId();
-        
         console.log(`\n🆕 Creating new round: ${newRoundId}`);
         
-        // Update current round
+        // Update current round FIRST
         CURRENT_ROUND = {
             id: newRoundId,
             startTime: Date.now()
         };
         
         try {
-            // Create new round in database
-            const newRound = await Round.create({
-                roundId: newRoundId,
-                redPool: 0,
-                greenPool: 0,
-                winner: null
-            });
+            // Check if round already exists (prevent duplicates)
+            const existingRound = await Round.findOne({ roundId: newRoundId });
             
-            console.log('✅ New round created in database');
+            if (existingRound) {
+                console.log(`⚠️ Round ${newRoundId} already exists, skipping creation`);
+            } else {
+                // Create new round
+                await Round.create({
+                    roundId: newRoundId,
+                    redPool: 0,
+                    greenPool: 0,
+                    winner: null
+                });
+                console.log('✅ New round created in database');
+            }
+            
             console.log('━'.repeat(50));
             console.log(`🎯 NEW ROUND STARTED: ${newRoundId}`);
             console.log(`⏱️  Duration: 60 seconds`);
@@ -836,7 +839,7 @@ setInterval(async () => {
             console.log('━'.repeat(50) + '\n');
             
         } catch (err) {
-            console.error('❌ CRITICAL: Failed to create new round in database!');
+            console.error('❌ CRITICAL: Failed to create new round!');
             console.error('Error:', err);
         }
     }
