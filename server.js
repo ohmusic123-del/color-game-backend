@@ -722,6 +722,19 @@ console.log(`🏆 WINNER SELECTED: ${winner.toUpperCase()}`);
 console.log('💾 Saving winner to database...');
 round.winner = winner;
 await round.save({ session });
+
+// ✅ VERIFY SAVE - ADD THIS
+const verifyRound = await Round.findOne({ roundId }).session(session);
+console.log('✅ Verified round in DB:', {
+    roundId: verifyRound.roundId,
+    winner: verifyRound.winner,
+    redPool: verifyRound.redPool,
+    greenPool: verifyRound.greenPool
+});
+
+if (!verifyRound.winner) {
+    console.error('❌ CRITICAL: Winner not saved to database!');
+}
 console.log('✅ Winner saved successfully');
 const bets = await Bet.find({
 roundId,
