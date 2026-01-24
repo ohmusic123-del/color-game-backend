@@ -813,27 +813,42 @@ console.error('Error:', err);
 }
 }, 1000);
 /* =========================
-INITIALIZE FIRST ROUND
+INITIALIZE FIRST ROUND - REPLACE ENTIRE SECTION
 ========================= */
 (async () => {
-try {
-console.log('\n🚀 Initializing game server...');
-const existingRound = await Round.findOne({ roundId: CURRENT_ROUND.id });
-if (!existingRound) {
-await Round.create({
-roundId: CURRENT_ROUND.id,
-redPool: 0,
-greenPool: 0,
-winner: null
-});
-console.log('✅ First round created:', CURRENT_ROUND.id);
-} else {
-console.log('✅ Resuming existing round:', CURRENT_ROUND.id);
-}
-console.log('✅ Game server ready!\n');
-} catch (err) {
-console.error('❌ Round initialization error:', err);
-}
+    try {
+        console.log('\n🎮 Initializing game server...');
+        
+        const firstRoundId = await getNextRoundId();
+        CURRENT_ROUND.id = firstRoundId;
+        
+        console.log(`📋 Starting Round ID: ${firstRoundId}`);
+        
+        const existingRound = await Round.findOne({ roundId: firstRoundId });
+        
+        if (!existingRound) {
+            await Round.create({
+                roundId: firstRoundId,
+                redPool: 0,
+                greenPool: 0,
+                winner: null
+            });
+            console.log(`✅ Round ${firstRoundId} created`);
+        } else {
+            console.log(`📌 Resuming round: ${firstRoundId}`);
+        }
+        
+        console.log('✅ Game server ready!\n');
+        console.log('━'.repeat(50));
+        console.log(`🎯 Current Round: ${firstRoundId}`);
+        console.log(`⏱️  Round Duration: 60 seconds`);
+        console.log(`🎲 Next Round: ${parseInt(firstRoundId) + 1}`);
+        console.log('━'.repeat(50) + '\n');
+        
+    } catch (err) {
+        console.error('❌ Round initialization error:', err);
+        CURRENT_ROUND.id = Date.now().toString();
+    }
 })();
 /* =========================
 ROUND INFO
