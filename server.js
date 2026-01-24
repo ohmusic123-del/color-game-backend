@@ -5,6 +5,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const { Cashfree } = require("cashfree-pg");
+const bcrypt = require("bcryptjs");
 
 const app = express();
 
@@ -74,7 +75,7 @@ const authenticateMonitor = async (req, res, next) => {
 };
 
 // Authenticate Admin (reuse your existing admin auth)
-const authenticateAdmin = async (req, res, next) => {
+const adminAuth = async (req, res, next) => {
     try {
         const token = req.headers.authorization;
         if (!token) {
@@ -243,7 +244,7 @@ app.get('/monitor/round-stats', authenticateMonitor, async (req, res) => {
 // ============================================
 
 // Get All Monitor Users
-app.get('/admin/monitor-users', authenticateAdmin, async (req, res) => {
+app.get('/admin/monitor-users', adminAuth, async (req, res) => {
     try {
         const monitors = await MonitorUser.find()
             .select('-password')
@@ -257,7 +258,7 @@ app.get('/admin/monitor-users', authenticateAdmin, async (req, res) => {
 });
 
 // Create Monitor User
-app.post('/admin/monitor-user', authenticateAdmin, async (req, res) => {
+app.post('/admin/monitor-user', adminAuth, async (req, res) => {
     try {
         const { username, password, displayName } = req.body;
 
@@ -305,7 +306,7 @@ app.post('/admin/monitor-user', authenticateAdmin, async (req, res) => {
 });
 
 // Update Monitor User
-app.put('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
+app.put('/admin/monitor-user/:id', adminAuth, async (req, res) => {
     try {
         const { username, password, displayName } = req.body;
 
@@ -338,7 +339,7 @@ app.put('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
 });
 
 // Toggle Monitor User Active Status
-app.post('/admin/monitor-user/:id/toggle', authenticateAdmin, async (req, res) => {
+app.post('/admin/monitor-user/:id/toggle', adminAuth, async (req, res) => {
     try {
         const { active } = req.body;
 
@@ -365,7 +366,7 @@ app.post('/admin/monitor-user/:id/toggle', authenticateAdmin, async (req, res) =
 });
 
 // Delete Monitor User
-app.delete('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
+app.delete('/admin/monitor-user/:id', adminAuth, async (req, res) => {
     try {
         const monitor = await MonitorUser.findById(req.params.id);
         if (!monitor) {
@@ -390,7 +391,7 @@ app.delete('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
 });
 
 // Get Monitor Activity Log
-app.get('/admin/monitor-activity', authenticateAdmin, async (req, res) => {
+app.get('/admin/monitor-activity', adminAuth, async (req, res) => {
     try {
         const activities = await MonitorActivity.find()
             .sort({ timestamp: -1 })
