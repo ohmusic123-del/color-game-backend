@@ -100,7 +100,7 @@ const authenticateAdmin = async (req, res, next) => {
 // ============================================
 
 // Monitor Login
-router.post('/monitor/login', async (req, res) => {
+app.post('/monitor/login', async (req, res) => {
     try {
         const { username, password } = req.body;
 
@@ -152,7 +152,7 @@ router.post('/monitor/login', async (req, res) => {
 // ============================================
 
 // Get Live Bets for Current Round
-router.get('/monitor/live-bets', authenticateMonitor, async (req, res) => {
+app.get('/monitor/live-bets', authenticateMonitor, async (req, res) => {
     try {
         // Get current active round
         const currentRound = await Round.findOne({ status: 'ACTIVE' });
@@ -195,7 +195,7 @@ router.get('/monitor/live-bets', authenticateMonitor, async (req, res) => {
 });
 
 // Get Current Round Stats
-router.get('/monitor/round-stats', authenticateMonitor, async (req, res) => {
+app.get('/monitor/round-stats', authenticateMonitor, async (req, res) => {
     try {
         const currentRound = await Round.findOne({ status: 'ACTIVE' });
         
@@ -243,7 +243,7 @@ router.get('/monitor/round-stats', authenticateMonitor, async (req, res) => {
 // ============================================
 
 // Get All Monitor Users
-router.get('/admin/monitor-users', authenticateAdmin, async (req, res) => {
+app.get('/admin/monitor-users', authenticateAdmin, async (req, res) => {
     try {
         const monitors = await MonitorUser.find()
             .select('-password')
@@ -257,7 +257,7 @@ router.get('/admin/monitor-users', authenticateAdmin, async (req, res) => {
 });
 
 // Create Monitor User
-router.post('/admin/monitor-user', authenticateAdmin, async (req, res) => {
+app.post('/admin/monitor-user', authenticateAdmin, async (req, res) => {
     try {
         const { username, password, displayName } = req.body;
 
@@ -305,7 +305,7 @@ router.post('/admin/monitor-user', authenticateAdmin, async (req, res) => {
 });
 
 // Update Monitor User
-router.put('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
+app.put('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
     try {
         const { username, password, displayName } = req.body;
 
@@ -338,7 +338,7 @@ router.put('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
 });
 
 // Toggle Monitor User Active Status
-router.post('/admin/monitor-user/:id/toggle', authenticateAdmin, async (req, res) => {
+app.post('/admin/monitor-user/:id/toggle', authenticateAdmin, async (req, res) => {
     try {
         const { active } = req.body;
 
@@ -365,7 +365,7 @@ router.post('/admin/monitor-user/:id/toggle', authenticateAdmin, async (req, res
 });
 
 // Delete Monitor User
-router.delete('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
+app.delete('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => {
     try {
         const monitor = await MonitorUser.findById(req.params.id);
         if (!monitor) {
@@ -390,7 +390,7 @@ router.delete('/admin/monitor-user/:id', authenticateAdmin, async (req, res) => 
 });
 
 // Get Monitor Activity Log
-router.get('/admin/monitor-activity', authenticateAdmin, async (req, res) => {
+app.get('/admin/monitor-activity', authenticateAdmin, async (req, res) => {
     try {
         const activities = await MonitorActivity.find()
             .sort({ timestamp: -1 })
