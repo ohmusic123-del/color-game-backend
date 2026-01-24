@@ -791,7 +791,7 @@ if (elapsed >= 60) {
 console.log('\n⏰ Round timer reached 60 seconds - Ending round...');
 console.log(`⏰ Current round ID: ${CURRENT_ROUND.id}`);
 await processRoundEnd(CURRENT_ROUND.id);
-const newRoundId = Date.now().toString();
+const newRoundId = await getNextRoundId();
 console.log(`\n🆕 Creating new round: ${newRoundId}`);
 CURRENT_ROUND = {
 id: newRoundId,
