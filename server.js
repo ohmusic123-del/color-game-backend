@@ -887,13 +887,14 @@ ROUND INFO
 ========================= */
 app.get("/rounds/history", async (req, res) => {
     try {
-        const rounds = await Round.find()
+        // ✅ ONLY return rounds that have a winner (completed rounds)
+        const rounds = await Round.find({ winner: { $ne: null } })
             .sort({ createdAt: -1 })
             .limit(20)
             .select("roundId winner redPool greenPool createdAt")
-            .lean(); // Add .lean() for better performance
+            .lean();
         
-        console.log('📊 Returning round history:', rounds.length, 'rounds');
+        console.log(`📊 Returning ${rounds.length} completed rounds`);
         
         res.json(rounds);
     } catch (err) {
