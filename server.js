@@ -403,17 +403,7 @@ app.get('/admin/monitor-activity', authenticateAdmin, async (req, res) => {
     }
 });
 
-// ============================================
-// EXPORT ROUTER
-// ============================================
 
-module.exports = router;
-
-// ============================================
-// USAGE IN YOUR MAIN SERVER FILE
-// ============================================
-// const monitorRoutes = require('./routes/monitor');
-// app.use('/api', monitorRoutes);
 /* =========================
 APP SETUP
 ========================= */
