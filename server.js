@@ -804,11 +804,11 @@ greenPool: 0,
 winner: null
 });
 console.log('✅ New round created in database');
-console.log(`🆕 NEW ROUND STARTED: ${newRoundId}`);
-console.log(`⏰ Next round will end in 60 seconds\n`);
-} catch (err) {
-console.error('❌❌❌ CRITICAL: Failed to create new round in database!');
-console.error('Error:', err);
+console.log('━'.repeat(50));
+console.log(`🎯 NEW ROUND STARTED: ${newRoundId}`);
+console.log(`⏱️  Duration: 60 seconds`);
+console.log(`🎲 Next Round: ${parseInt(newRoundId) + 1}`);
+console.log('━'.repeat(50) + '\n');
 }
 }
 }, 1000);
