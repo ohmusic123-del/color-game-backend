@@ -273,7 +273,8 @@ app.post('/admin/monitor-user', adminAuth, async (req, res) => {
         // Log activity
         await MonitorActivity.create({
             username: req.admin.username || 'admin',
-            action: CREATED monitor user: ${username},
+           action: `CREATED monitor user: ${username}`,
+
             ipAddress: req.ip
         });
 
