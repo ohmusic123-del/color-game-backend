@@ -5,11 +5,10 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const { Cashfree } = require("cashfree-pg");
-const bcrypt = require("bcryptjs");
+const bcrypt = require('bcryptjs');
 
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
 /* =========================
 MODELS - MUST BE BEFORE ROUTES
 ========================= */
@@ -79,18 +78,26 @@ const authenticateMonitor = async (req, res, next) => {
 // ============================================
 // MONITOR LOGIN & AUTHENTICATION
 // ============================================
-
 // Monitor Login
 app.post('/monitor/login', async (req, res) => {
     try {
+        console.log('Monitor login attempt:', req.body.username);
         const { username, password } = req.body;
 
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+
         const monitor = await MonitorUser.findOne({ username });
+        console.log('Monitor found:', monitor ? 'Yes' : 'No');
+
         if (!monitor || !monitor.active) {
             return res.status(401).json({ error: 'Invalid credentials or account disabled' });
         }
 
         const isValid = await bcrypt.compare(password, monitor.password);
+        console.log('Password valid:', isValid);
+
         if (!isValid) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
@@ -114,6 +121,8 @@ app.post('/monitor/login', async (req, res) => {
             { expiresIn: '24h' }
         );
 
+        console.log('Monitor login successful');
+
         res.json({
             success: true,
             token,
@@ -124,9 +133,10 @@ app.post('/monitor/login', async (req, res) => {
         });
     } catch (err) {
         console.error('Monitor login error:', err);
-        res.status(500).json({ error: 'Login failed' });
+        res.status(500).json({ error: 'Login failed: ' + err.message });
     }
 });
+
 
 // ============================================
 // LIVE BETTING MONITOR ENDPOINTS
@@ -135,33 +145,32 @@ app.post('/monitor/login', async (req, res) => {
 // Get Live Bets for Current Round
 app.get('/monitor/live-bets', authenticateMonitor, async (req, res) => {
     try {
-        // Get current active round
-        const currentRound = await Round.findOne({ status: 'ACTIVE' });
-        
-        if (!currentRound) {
-            return res.json({ red: [], green: [] });
-        }
-
-        // Get all pending bets for this round
         const bets = await Bet.find({
-            roundId: currentRound.id,
+            roundId: CURRENT_ROUND.id,
             status: 'PENDING'
         })
-        .populate('userId', 'mobile')
-        .sort({ createdAt: -1 })
-        .limit(100); // Limit to last 100 bets for performance
+            .sort({ createdAt: -1 })
+            .limit(100);
 
-        // Separate by color
         const redBets = bets
             .filter(bet => bet.color === 'red')
             .map(bet => ({
                 id: bet._id,
-                mobile: bet.userId?.mobile || 'Unknown',
+                mobile: bet.mobile,
                 amount: bet.amount,
                 time: bet.createdAt
             }));
-              
-// Log activity (optional, for tracking)
+
+        const greenBets = bets
+            .filter(bet => bet.color === 'green')
+            .map(bet => ({
+                id: bet._id,
+                mobile: bet.mobile,
+                amount: bet.amount,
+                time: bet.createdAt
+            }));
+
+        // Log activity
         await MonitorActivity.create({
             username: req.monitor.username,
             action: 'VIEW_BETS',
@@ -178,21 +187,8 @@ app.get('/monitor/live-bets', authenticateMonitor, async (req, res) => {
 // Get Current Round Stats
 app.get('/monitor/round-stats', authenticateMonitor, async (req, res) => {
     try {
-        const currentRound = await Round.findOne({ status: 'ACTIVE' });
-        
-        if (!currentRound) {
-            return res.json({
-                redTotal: 0,
-                greenTotal: 0,
-                redBets: 0,
-                greenBets: 0,
-                totalPlayers: 0,
-                potentialPayout: 0
-            });
-        }
-
         const bets = await Bet.find({
-            roundId: currentRound.id,
+            roundId: CURRENT_ROUND.id,
             status: 'PENDING'
         });
 
@@ -202,8 +198,7 @@ app.get('/monitor/round-stats', authenticateMonitor, async (req, res) => {
         const redTotal = redBets.reduce((sum, b) => sum + b.amount, 0);
         const greenTotal = greenBets.reduce((sum, b) => sum + b.amount, 0);
 
-        // Get unique players
-        const uniquePlayers = new Set(bets.map(b => b.userId.toString())).size;
+        const uniquePlayers = new Set(bets.map(b => b.mobile)).size;
 
         res.json({
             redTotal,
@@ -223,28 +218,35 @@ app.get('/monitor/round-stats', authenticateMonitor, async (req, res) => {
 // ADMIN ENDPOINTS - MONITOR USER MANAGEMENT
 // ============================================
 
-// Get All Monitor Users
+// Get All Monitor Users (Admin Only)
 app.get('/admin/monitor-users', adminAuth, async (req, res) => {
     try {
+        console.log('Fetching monitor users for admin:', req.admin.username);
+        
         const monitors = await MonitorUser.find()
             .select('-password')
             .sort({ createdAt: -1 });
 
+        console.log('Found', monitors.length, 'monitor users');
         res.json(monitors);
     } catch (err) {
         console.error('Get monitors error:', err);
-        res.status(500).json({ error: 'Failed to fetch monitor users' });
+        res.status(500).json({ error: 'Failed to fetch monitor users: ' + err.message });
     }
 });
 
-// Create Monitor User
+// Create Monitor User (Admin Only)
 app.post('/admin/monitor-user', adminAuth, async (req, res) => {
     try {
+        console.log('Creating monitor user:', req.body);
         const { username, password, displayName } = req.body;
 
-        // Validate
         if (!username || !password) {
             return res.status(400).json({ error: 'Username and password required' });
+        }
+
+        if (password.length < 6) {
+            return res.status(400).json({ error: 'Password must be at least 6 characters' });
         }
 
         // Check if username exists
@@ -254,20 +256,24 @@ app.post('/admin/monitor-user', adminAuth, async (req, res) => {
         }
 
         // Hash password
+        console.log('Hashing password...');
         const hashedPassword = await bcrypt.hash(password, 10);
+        console.log('Password hashed successfully');
 
         // Create monitor user
         const monitor = await MonitorUser.create({
             username,
             password: hashedPassword,
             displayName: displayName || username,
-            createdBy: req.admin.username
+            createdBy: req.admin.username || 'admin'
         });
+
+        console.log('Monitor user created:', monitor.username);
 
         // Log activity
         await MonitorActivity.create({
-            username: req.admin.username,
-            action: `CREATED monitor user: ${username}`,
+            username: req.admin.username || 'admin',
+            action: CREATED monitor user: ${username},
             ipAddress: req.ip
         });
 
@@ -276,18 +282,21 @@ app.post('/admin/monitor-user', adminAuth, async (req, res) => {
             monitor: {
                 _id: monitor._id,
                 username: monitor.username,
-                displayName: monitor.displayName
+                displayName: monitor.displayName,
+                active: monitor.active
             }
         });
     } catch (err) {
         console.error('Create monitor error:', err);
-        res.status(500).json({ error: 'Failed to create monitor user' });
+        res.status(500).json({ error: 'Failed to create monitor user: ' + err.message });
     }
 });
 
-// Update Monitor User
+
+// Update Monitor User (Admin Only)
 app.put('/admin/monitor-user/:id', adminAuth, async (req, res) => {
     try {
+        console.log('Updating monitor user:', req.params.id, req.body);
         const { username, password, displayName } = req.body;
 
         const monitor = await MonitorUser.findById(req.params.id);
@@ -298,7 +307,7 @@ app.put('/admin/monitor-user/:id', adminAuth, async (req, res) => {
         // Update fields
         if (username) monitor.username = username;
         if (displayName) monitor.displayName = displayName;
-        if (password) {
+        if (password && password.length >= 6) {
             monitor.password = await bcrypt.hash(password, 10);
         }
 
@@ -306,21 +315,32 @@ app.put('/admin/monitor-user/:id', adminAuth, async (req, res) => {
 
         // Log activity
         await MonitorActivity.create({
-            username: req.admin.username,
-            action: `UPDATED monitor user: ${monitor.username}`,
+            username: req.admin.username || 'admin',
+            action: UPDATED monitor user: ${monitor.username},
             ipAddress: req.ip
         });
 
-        res.json({ success: true, monitor });
+        console.log('Monitor user updated successfully');
+
+        res.json({ 
+            success: true, 
+            monitor: {
+                _id: monitor._id,
+                username: monitor.username,
+                displayName: monitor.displayName,
+                active: monitor.active
+            }
+        });
     } catch (err) {
         console.error('Update monitor error:', err);
-        res.status(500).json({ error: 'Failed to update monitor user' });
+        res.status(500).json({ error: 'Failed to update monitor user: ' + err.message });
     }
 });
 
-// Toggle Monitor User Active Status
+// Toggle Monitor User Active Status (Admin Only)
 app.post('/admin/monitor-user/:id/toggle', adminAuth, async (req, res) => {
     try {
+        console.log('Toggling monitor user:', req.params.id, req.body);
         const { active } = req.body;
 
         const monitor = await MonitorUser.findById(req.params.id);
@@ -333,58 +353,74 @@ app.post('/admin/monitor-user/:id/toggle', adminAuth, async (req, res) => {
 
         // Log activity
         await MonitorActivity.create({
-            username: req.admin.username,
-            action: `${active ? 'ENABLED' : 'DISABLED'} monitor user: ${monitor.username}`,
+            username: req.admin.username || 'admin',
+            action: ${active ? 'ENABLED' : 'DISABLED'} monitor user: ${monitor.username},
             ipAddress: req.ip
         });
 
-        res.json({ success: true, monitor });
+        console.log('Monitor user toggled successfully');
+
+        res.json({ 
+            success: true, 
+            monitor: {
+                _id: monitor._id,
+                username: monitor.username,
+                displayName: monitor.displayName,
+                active: monitor.active
+            }
+        });
     } catch (err) {
         console.error('Toggle monitor error:', err);
-        res.status(500).json({ error: 'Failed to toggle monitor user' });
+        res.status(500).json({ error: 'Failed to toggle monitor user: ' + err.message });
     }
 });
 
-// Delete Monitor User
+// Delete Monitor User (Admin Only)
 app.delete('/admin/monitor-user/:id', adminAuth, async (req, res) => {
     try {
+        console.log('Deleting monitor user:', req.params.id);
+
         const monitor = await MonitorUser.findById(req.params.id);
         if (!monitor) {
             return res.status(404).json({ error: 'Monitor user not found' });
         }
 
         const username = monitor.username;
-        await monitor.deleteOne();
+        await MonitorUser.deleteOne({ _id: req.params.id });
 
         // Log activity
         await MonitorActivity.create({
-            username: req.admin.username,
-            action: `DELETED monitor user: ${username}`,
+            username: req.admin.username || 'admin',
+            action: DELETED monitor user: ${username},
             ipAddress: req.ip
         });
+
+        console.log('Monitor user deleted successfully');
 
         res.json({ success: true });
     } catch (err) {
         console.error('Delete monitor error:', err);
-        res.status(500).json({ error: 'Failed to delete monitor user' });
+        res.status(500).json({ error: 'Failed to delete monitor user: ' + err.message });
     }
 });
 
-// Get Monitor Activity Log
+// Get Monitor Activity Log (Admin Only)
 app.get('/admin/monitor-activity', adminAuth, async (req, res) => {
     try {
+        console.log('Fetching monitor activity log');
+
         const activities = await MonitorActivity.find()
             .sort({ timestamp: -1 })
             .limit(50);
 
+        console.log('Found', activities.length, 'activities');
+
         res.json(activities);
     } catch (err) {
         console.error('Activity log error:', err);
-        res.status(500).json({ error: 'Failed to fetch activity log' });
+        res.status(500).json({ error: 'Failed to fetch activity log: ' + err.message });
     }
 });
-
-
 /* =========================
 APP SETUP
 ========================= */
