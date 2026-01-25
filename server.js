@@ -4,13 +4,14 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
-const { Cashfree } = require("cashfree-pg");
 const bcrypt = require('bcryptjs');
+const { Cashfree } = require("cashfree-pg");
+
 
 const app = express();
 
 /* =========================
-MODELS - MUST BE BEFORE ROUTES
+MODELS - Load models first
 ========================= */
 const User = require("./models/User");
 const Bet = require("./models/Bet");
@@ -18,6 +19,8 @@ const Round = require("./models/Round");
 const Withdraw = require("./models/Withdraw");
 const Deposit = require("./models/Deposit");
 const Referral = require("./models/Referral");
+const MonitorUser = require("./models/MonitorUser");
+const MonitorActivity = require("./models/MonitorActivity");
 
 // MonitorUser Model
 const monitorUserSchema = new mongoose.Schema({
@@ -49,32 +52,45 @@ MIDDLEWARE - MUST BE BEFORE ROUTES
 ========================= */
 const auth = require("./middleware/auth");
 
-// Authenticate Monitor User
+// Admin Auth
+function adminAuth(req, res, next) {
+    try {
+        const token = req.headers.authorization?.replace("Bearer ", "");
+        if (!token) {
+            return res.status(401).json({ error: "Admin token missing" });
+        }
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded.role !== "admin") {
+            return res.status(403).json({ error: "Admin access denied" });
+        }
+        req.admin = decoded;
+        next();
+    } catch (err) {
+        return res.status(401).json({ error: "Invalid admin token" });
+    }
+}
+
+// Monitor Auth
 const authenticateMonitor = async (req, res, next) => {
     try {
         const token = req.headers.authorization?.replace('Bearer ', '');
         if (!token) {
             return res.status(401).json({ error: 'No token provided' });
         }
-
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         const monitor = await MonitorUser.findOne({
             username: decoded.username,
             active: true
         });
-
         if (!monitor) {
             return res.status(401).json({ error: 'Invalid or inactive monitor user' });
         }
-
         req.monitor = monitor;
         next();
     } catch (err) {
         res.status(401).json({ error: 'Invalid or expired token' });
     }
 };
-
-
 // ============================================
 // MONITOR LOGIN & AUTHENTICATION
 // ============================================
@@ -436,25 +452,6 @@ app.use((req, res, next) => {
   next();
 });
 
-/* =========================
-ADMIN AUTH MIDDLEWARE
-========================= */
-function adminAuth(req, res, next) {
-  try {
-    const token = req.headers.authorization?.replace("Bearer ", "");
-    if (!token) {
-      return res.status(401).json({ error: "Admin token missing" });
-    }
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (decoded.role !== "admin") {
-      return res.status(403).json({ error: "Admin access denied" });
-    }
-    req.admin = decoded;
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: "Invalid admin token" });
-  }
-}
 
 /* =========================
 CASHFREE CONFIGURATION
