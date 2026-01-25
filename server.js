@@ -394,7 +394,8 @@ app.delete('/admin/monitor-user/:id', adminAuth, async (req, res) => {
         // Log activity
         await MonitorActivity.create({
             username: req.admin.username || 'admin',
-            action: DELETED monitor user: ${username},
+           action: `DELETED monitor user: ${username}`,
+
             ipAddress: req.ip
         });
 
