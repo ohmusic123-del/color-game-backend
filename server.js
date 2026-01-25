@@ -22,30 +22,6 @@ const Referral = require("./models/Referral");
 const MonitorUser = require("./models/MonitorUser");
 const MonitorActivity = require("./models/MonitorActivity");
 
-// MonitorUser Model
-const monitorUserSchema = new mongoose.Schema({
-    username: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
-    displayName: String,
-    active: { type: Boolean, default: true },
-    totalLogins: { type: Number, default: 0 },
-    lastLogin: Date,
-    createdAt: { type: Date, default: Date.now },
-    createdBy: String // Admin username who created this
-});
-
-const MonitorUser = mongoose.model('MonitorUser', monitorUserSchema);
-
-// MonitorActivity Model
-const monitorActivitySchema = new mongoose.Schema({
-    username: String,
-    action: String, // 'LOGIN', 'LOGOUT', 'VIEW_BETS'
-    ipAddress: String,
-    timestamp: { type: Date, default: Date.now }
-});
-
-const MonitorActivity = mongoose.model('MonitorActivity', monitorActivitySchema);
-
 
 /* =========================
 MIDDLEWARE - MUST BE BEFORE ROUTES
