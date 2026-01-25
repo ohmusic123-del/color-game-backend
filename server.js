@@ -791,7 +791,16 @@ BASIC
 app.use(express.json());
 app.get("/", (req, res) => {
 res.send("BIGWIN backend running - All systems operational ✅");
-}); /* =========================
+}); 
+// Add this TEST endpoint to check if monitor routes are working
+app.get('/admin/test-monitor', adminAuth, async (req, res) => {
+    res.json({ 
+        message: 'Monitor endpoints are working!',
+        bcryptAvailable: !!require('bcryptjs'),
+        adminUser: req.admin.username
+    });
+});
+/* =========================
 AUTH – USER
 ========================= */
 app.post('/register', async (req, res) => {
