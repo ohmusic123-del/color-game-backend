@@ -317,7 +317,8 @@ app.put('/admin/monitor-user/:id', adminAuth, async (req, res) => {
         // Log activity
         await MonitorActivity.create({
             username: req.admin.username || 'admin',
-            action: UPDATED monitor user: ${monitor.username},
+            action: `UPDATED monitor user: ${monitor.username}`,
+
             ipAddress: req.ip
         });
 
