@@ -356,8 +356,9 @@ app.post('/admin/monitor-user/:id/toggle', adminAuth, async (req, res) => {
         // Log activity
         await MonitorActivity.create({
             username: req.admin.username || 'admin',
-            action: ${active ? 'ENABLED' : 'DISABLED'} monitor user: ${monitor.username},
-            ipAddress: req.ip
+            action: `${active ? 'ENABLED' : 'DISABLED'} monitor user: ${monitor.username}`,
+
+      ipAddress: req.ip
         });
 
         console.log('Monitor user toggled successfully');
