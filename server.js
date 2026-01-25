@@ -58,9 +58,9 @@ const authenticateMonitor = async (req, res, next) => {
         }
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const monitor = await MonitorUser.findOne({ 
+        const monitor = await MonitorUser.findOne({
             username: decoded.username,
-            active: true 
+            active: true
         });
 
         if (!monitor) {
