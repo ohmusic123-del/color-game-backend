@@ -606,10 +606,10 @@ app.post("/api/cashfree/create-order", auth, async (req, res) => {
     const { amount } = req.body;
     
     // Validate amount
-    if (!amount || Number(amount) < 10) {
+    if (!amount || Number(amount) < 100) {
       return res.status(400).json({ 
         success: false,
-        message: "Minimum deposit ₹10" 
+        message: "Minimum deposit ₹100" 
       });
     }
     
