@@ -1025,16 +1025,7 @@ return res.status(404).json({ error: "User not found" });
         error: `Already placed bet: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}`
       });
     }
-const existingBet = await Bet.findOne({
-mobile: req.user.mobile,
-roundId: CURRENT_ROUND.id
-}).session(session);
-if (existingBet) {
-await session.abortTransaction(); session.endSession();
-return res.status(400).json({
-error: `Already placed bet: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}`
-});
-}
+
 const totalBalance = (user.wallet || 0) + (user.bonus || 0);
 if (totalBalance < betAmount) {
 await session.abortTransaction();
