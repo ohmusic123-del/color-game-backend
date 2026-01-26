@@ -1003,6 +1003,28 @@ await session.abortTransaction();
 session.endSession();
 return res.status(404).json({ error: "User not found" });
 }
+   // ✅ ADD THIS CHECK - Block betting if no deposit
+    if (!user.deposited) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json({ 
+        error: "Please make your first deposit to start playing",
+        requireDeposit: true 
+      });
+    }
+    
+    const existingBet = await Bet.findOne({
+      mobile: req.user.mobile,
+      roundId: CURRENT_ROUND.id
+    }).session(session);
+    
+    if (existingBet) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: `Already placed bet: ₹${existingBet.amount} on ${existingBet.color.toUpperCase()}`
+      });
+    }
 const existingBet = await Bet.findOne({
 mobile: req.user.mobile,
 roundId: CURRENT_ROUND.id
