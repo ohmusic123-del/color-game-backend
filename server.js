@@ -21,6 +21,9 @@ const Deposit = require("./models/Deposit");
 const Referral = require("./models/Referral");
 const MonitorUser = require("./models/MonitorUser");
 const MonitorActivity = require("./models/MonitorActivity");
+// ✅ ADD THESE NEW MODELS
+const RahulModiBet = require("./models/RahulModiBet");
+const RahulModiRound = require("./models/RahulModiRound");
 
 
 /* =========================
