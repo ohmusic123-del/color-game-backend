@@ -526,6 +526,41 @@ let CURRENT_ROUND = {
     id: null,
     startTime: Date.now()
 };
+
+/* ✅ Rahul Modi Game - NEW */
+let RAHUL_MODI_ROUND = {
+  id: null,
+  startTime: Date.now()
+};
+
+/* =========================
+RAHUL MODI ROUND ID GENERATOR
+========================= */
+let CURRENT_RAHUL_MODI_ROUND_NUMBER = null;
+
+async function getNextRahulModiRoundId() {
+  try {
+    if (CURRENT_RAHUL_MODI_ROUND_NUMBER === null) {
+      const latestRound = await RahulModiRound.findOne()
+        .sort({ createdAt: -1 })
+        .select('roundId');
+      
+      if (latestRound && latestRound.roundId) {
+        const lastNumber = parseInt(latestRound.roundId);
+        CURRENT_RAHUL_MODI_ROUND_NUMBER = lastNumber + 1;
+      } else {
+        CURRENT_RAHUL_MODI_ROUND_NUMBER = 200000; // Different starting number
+      }
+    } else {
+      CURRENT_RAHUL_MODI_ROUND_NUMBER++;
+    }
+    
+    return CURRENT_RAHUL_MODI_ROUND_NUMBER.toString();
+  } catch (err) {
+    console.error('Error getting next Rahul Modi round ID:', err);
+    return Date.now().toString();
+  }
+}
 app.get("/round/current", async (req, res) => {
   try {
     // Return the current round info
@@ -1292,7 +1327,55 @@ setInterval(async () => {
     processRoundEnd(oldRoundId);
   }
 }, 1000);
-
+/* =========================
+RAHUL MODI ROUND TIMER
+========================= */
+setInterval(async () => {
+  const elapsed = Math.floor((Date.now() - RAHUL_MODI_ROUND.startTime) / 1000);
+  
+  if (elapsed >= 60) {
+    console.log('\n🎮 Rahul Modi round timer reached 60 seconds');
+    console.log(`🎮 Closing Round ID: ${RAHUL_MODI_ROUND.id}`);
+    
+    const oldRoundId = RAHUL_MODI_ROUND.id;
+    
+    const newRoundId = await getNextRahulModiRoundId();
+    console.log(`\n🎮 Creating new Rahul Modi round: ${newRoundId}`);
+    
+    RAHUL_MODI_ROUND = {
+      id: newRoundId,
+      startTime: Date.now()
+    };
+    
+    try {
+      const existingRound = await RahulModiRound.findOne({ roundId: newRoundId });
+      
+      if (existingRound) {
+        console.log(`🎮 Round ${newRoundId} already exists, skipping creation`);
+      } else {
+        await RahulModiRound.create({
+          roundId: newRoundId,
+          rahulPool: 0,
+          modiPool: 0,
+          winner: null
+        });
+        console.log('✓ New Rahul Modi round created in database');
+      }
+      
+      console.log('='.repeat(50));
+      console.log(`🎮 NEW RAHUL MODI ROUND STARTED: ${newRoundId}`);
+      console.log(`⏱️ Duration: 60 seconds`);
+      console.log(`📅 Next Round: ${parseInt(newRoundId) + 1}`);
+      console.log('='.repeat(50) + '\n');
+      
+    } catch (err) {
+      console.error('🎮 CRITICAL: Failed to create new Rahul Modi round!');
+      console.error('Error:', err);
+    }
+    
+    processRahulModiRoundEnd(oldRoundId);
+  }
+}, 1000);
 /* =========================
 FIXED ROUND INITIALIZATION - Replace your existing initialization
 ========================= */
@@ -1339,6 +1422,50 @@ FIXED ROUND INITIALIZATION - Replace your existing initialization
     CURRENT_ROUND.startTime = Date.now();
   }
 })();
+
+/* =========================
+RAHUL MODI GAME INITIALIZATION
+========================= */
+(async () => {
+  try {
+    console.log('\n🎮 Initializing Rahul Modi game...');
+    
+    const openRound = await RahulModiRound.findOne({ winner: null }).sort({ createdAt: -1 });
+    
+    let firstRoundId;
+    
+    if (openRound) {
+      firstRoundId = openRound.roundId;
+      console.log(`🎮 Resuming Rahul Modi round: ${firstRoundId}`);
+    } else {
+      firstRoundId = await getNextRahulModiRoundId();
+      await RahulModiRound.create({
+        roundId: firstRoundId,
+        rahulPool: 0,
+        modiPool: 0,
+        winner: null
+      });
+      console.log(`✓ Rahul Modi Round ${firstRoundId} created`);
+    }
+    
+    RAHUL_MODI_ROUND.id = firstRoundId;
+    RAHUL_MODI_ROUND.startTime = Date.now();
+    
+    console.log('🎮 Rahul Modi game ready!\n');
+    console.log('='.repeat(50));
+    console.log(`🎮 Current Round: ${firstRoundId}`);
+    console.log(`⏱️ Round Duration: 60 seconds`);
+    console.log(`📅 Next Round: ${parseInt(firstRoundId) + 1}`);
+    console.log('='.repeat(50) + '\n');
+    
+  } catch (err) {
+    console.error('🎮 Rahul Modi initialization error:', err);
+    RAHUL_MODI_ROUND.id = Date.now().toString();
+    RAHUL_MODI_ROUND.startTime = Date.now();
+  }
+})();
+
+
 /* =========================
 ROUND INFO
 ========================= */
@@ -2094,7 +2221,339 @@ app.post("/admin/user/:mobile/adjust-balance", adminAuth, async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+/* =========================
+RAHUL MODI GAME ENDPOINTS
+========================= */
 
+// Get Current Rahul Modi Round
+app.get("/rahulmodi/round/current", async (req, res) => {
+  try {
+    res.json({
+      id: RAHUL_MODI_ROUND.id,
+      startTime: RAHUL_MODI_ROUND.startTime
+    });
+  } catch (err) {
+    console.error("Rahul Modi current round error:", err);
+    res.status(500).json({ error: "Failed to get current round" });
+  }
+});
+
+// Place Bet on Rahul Modi Game
+app.post("/rahulmodi/bet", auth, async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    await session.startTransaction();
+    
+    const elapsed = Math.floor((Date.now() - RAHUL_MODI_ROUND.startTime) / 1000);
+    if (elapsed >= 57) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Round closed for betting" });
+    }
+    
+    const { option, amount } = req.body;
+    
+    if (!option || !['rahul', 'modi'].includes(option.toLowerCase())) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Invalid option. Choose Rahul or Modi." });
+    }
+    
+    if (!amount || amount < 1) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: "Minimum bet ₹1" });
+    }
+    
+    const betAmount = Math.round(amount * 100) / 100;
+    const user = await User.findOne({ mobile: req.user.mobile }).session(session);
+    
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    // Check if deposited
+    if (!user.deposited) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json({ 
+        error: "Please make your first deposit to start playing",
+        requireDeposit: true 
+      });
+    }
+    
+    const existingBet = await RahulModiBet.findOne({
+      mobile: req.user.mobile,
+      roundId: RAHUL_MODI_ROUND.id
+    }).session(session);
+    
+    if (existingBet) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: `Already placed bet: ₹${existingBet.amount} on ${existingBet.option.toUpperCase()}`
+      });
+    }
+    
+    const totalBalance = (user.wallet || 0) + (user.bonus || 0);
+    if (totalBalance < betAmount) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: `Insufficient balance. Available: ₹${totalBalance.toFixed(2)}`
+      });
+    }
+    
+    let deductFromBonus = Math.min(user.bonus, betAmount);
+    let deductFromWallet = betAmount - deductFromBonus;
+    
+    user.bonus = Math.round((user.bonus - deductFromBonus) * 100) / 100;
+    user.wallet = Math.round((user.wallet - deductFromWallet) * 100) / 100;
+    user.totalWagered = Math.round(((user.totalWagered || 0) + betAmount) * 100) / 100;
+    
+    await user.save({ session });
+    
+    await RahulModiBet.create([{
+      mobile: req.user.mobile,
+      roundId: RAHUL_MODI_ROUND.id,
+      option: option.toLowerCase(),
+      amount: betAmount,
+      status: 'PENDING',
+      createdAt: new Date()
+    }], { session });
+    
+    const updateField = option.toLowerCase() === 'rahul' ? 'rahulPool' : 'modiPool';
+    let round = await RahulModiRound.findOne({ roundId: RAHUL_MODI_ROUND.id }).session(session);
+    
+    if (!round) {
+      console.log(`🎮 Rahul Modi Round ${RAHUL_MODI_ROUND.id} not found - Creating it now!`);
+      const created = await RahulModiRound.create([{
+        roundId: RAHUL_MODI_ROUND.id,
+        rahulPool: 0,
+        modiPool: 0,
+        winner: null
+      }], { session });
+      round = created[0];
+    }
+    
+    if (updateField === 'rahulPool') {
+      round.rahulPool = Math.round((round.rahulPool + betAmount) * 100) / 100;
+    } else {
+      round.modiPool = Math.round((round.modiPool + betAmount) * 100) / 100;
+    }
+    
+    await round.save({ session });
+    
+    console.log(`🎮 Rahul Modi Bet: ${req.user.mobile.substring(0,4)}**** - ₹${betAmount} on ${option.toUpperCase()}`);
+    
+    await session.commitTransaction();
+    session.endSession();
+    
+    res.json({
+      message: "Bet placed successfully",
+      roundId: RAHUL_MODI_ROUND.id,
+      betAmount: betAmount,
+      option: option.toLowerCase(),
+      newWallet: user.wallet,
+      newBonus: user.bonus
+    });
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("🎮 RAHUL MODI BET ERROR:", err);
+    res.status(500).json({ error: "Bet failed. Please try again." });
+  }
+});
+
+// Get Rahul Modi Round History
+app.get("/rahulmodi/rounds/history", async (req, res) => {
+  try {
+    const rounds = await RahulModiRound.find({ winner: { $ne: null } })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .select("roundId winner rahulPool modiPool createdAt")
+      .lean();
+    
+    console.log(`🎮 Returning ${rounds.length} Rahul Modi completed rounds`);
+    
+    res.json(rounds);
+  } catch (err) {
+    console.error("Rahul Modi rounds history error:", err);
+    res.status(500).json({ error: "Failed to load rounds" });
+  }
+});
+
+// Get Rahul Modi Bets
+app.get("/rahulmodi/bets", auth, async (req, res) => {
+  try {
+    const bets = await RahulModiBet.find({ mobile: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.json(bets);
+  } catch (err) {
+    console.error("Rahul Modi bets fetch error:", err);
+    res.status(500).json({ error: "Failed to load bets" });
+  }
+});
+
+// Get Current Round Bets
+app.get("/rahulmodi/bets/current", auth, async (req, res) => {
+  try {
+    const bets = await RahulModiBet.find({
+      mobile: req.user.mobile,
+      roundId: RAHUL_MODI_ROUND.id
+    });
+    res.json({ roundId: RAHUL_MODI_ROUND.id, bets });
+  } catch (err) {
+    console.error("Rahul Modi current bets error:", err);
+    res.status(500).json({ error: "Failed to load current bets" });
+  }
+});
+
+/* =========================
+RAHUL MODI ROUND PROCESSING
+========================= */
+async function processRahulModiRoundEnd(roundId) {
+  console.log(`\n🎮 START PROCESSING RAHUL MODI ROUND: ${roundId}`);
+  const session = await mongoose.startSession();
+  
+  try {
+    await session.startTransaction();
+    console.log('✓ Transaction started');
+    console.log(`\n${'='.repeat(50)}`);
+    console.log(`🎮 PROCESSING RAHUL MODI ROUND: ${roundId}`);
+    console.log(`${'='.repeat(50)}`);
+    
+    const round = await RahulModiRound.findOne({ roundId }).session(session);
+    
+    if (!round) {
+      console.error('🎮 CRITICAL: Rahul Modi Round not found:', roundId);
+      await session.abortTransaction();
+      session.endSession();
+      return;
+    }
+    
+    console.log('✓ Round found in database');
+    
+    if (round.winner !== null) {
+      console.log('🎮 Round already processed with winner:', round.winner);
+      await session.abortTransaction();
+      session.endSession();
+      return;
+    }
+    
+    const rahulPool = round.rahulPool || 0;
+    const modiPool = round.modiPool || 0;
+    const totalPool = rahulPool + modiPool;
+    
+    console.log(`🎮 RAHUL POOL: ₹${rahulPool}`);
+    console.log(`🎮 MODI POOL: ₹${modiPool}`);
+    console.log(`🎮 TOTAL POOL: ₹${totalPool}`);
+    
+    let winner;
+    if (totalPool === 0) {
+      winner = Math.random() < 0.5 ? 'rahul' : 'modi';
+      console.log('🎮 No bets - Random winner selected');
+    } else if (rahulPool === modiPool) {
+      winner = Math.random() < 0.5 ? 'rahul' : 'modi';
+      console.log('🎮 Equal pools - Random winner selected');
+    } else {
+      winner = rahulPool < modiPool ? 'rahul' : 'modi';
+      console.log('🎮 Different pools - Smaller pool wins');
+    }
+    
+    console.log(`🎮 WINNER SELECTED: ${winner.toUpperCase()}`);
+    
+    round.winner = winner;
+    await round.save({ session });
+    
+    const verifyRound = await RahulModiRound.findOne({ roundId }).session(session);
+    console.log('✓ Verified round in DB:', {
+      roundId: verifyRound.roundId,
+      winner: verifyRound.winner,
+      rahulPool: verifyRound.rahulPool,
+      modiPool: verifyRound.modiPool
+    });
+    
+    if (!verifyRound.winner) {
+      console.error('🎮 CRITICAL: Winner not saved to database!');
+      await session.abortTransaction();
+      session.endSession();
+      return;
+    }
+    
+    console.log('✓ Winner saved successfully');
+    
+    const bets = await RahulModiBet.find({
+      roundId,
+      status: 'PENDING'
+    }).session(session);
+    
+    console.log(`🎮 Found ${bets.length} pending bets to process`);
+    
+    if (bets.length === 0) {
+      console.log('✓ No bets to process - Committing transaction...');
+      await session.commitTransaction();
+      session.endSession();
+      console.log(`🎮 Round ${roundId} completed with winner: ${winner.toUpperCase()}\n`);
+      return;
+    }
+    
+    let totalPayouts = 0;
+    let totalLosses = 0;
+    let processedCount = 0;
+    
+    for (const bet of bets) {
+      const user = await User.findOne({ mobile: bet.mobile }).session(session);
+      
+      if (!user) {
+        console.log(`🎮 User not found: ${bet.mobile}`);
+        continue;
+      }
+      
+      if (bet.option === winner) {
+        const winAmount = Math.round(bet.amount * 2 * 0.98 * 100) / 100;
+        user.wallet = Math.round((user.wallet + winAmount) * 100) / 100;
+        bet.status = 'WON';
+        bet.winAmount = winAmount;
+        totalPayouts += winAmount;
+        console.log(`🎮 ${user.mobile.substring(0, 4)}**** WON ₹${winAmount}`);
+      } else {
+        bet.status = 'LOST';
+        bet.winAmount = 0;
+        totalLosses += bet.amount;
+        console.log(`🎮 ${user.mobile.substring(0, 4)}**** LOST ₹${bet.amount}`);
+      }
+      
+      await user.save({ session });
+      await bet.save({ session });
+      processedCount++;
+    }
+    
+    const houseProfit = totalLosses - totalPayouts;
+    
+    console.log(`\n${'='.repeat(50)}`);
+    console.log(`🎮 Processed ${processedCount}/${bets.length} bets`);
+    console.log(`🎮 Total Payouts: ₹${totalPayouts.toFixed(2)}`);
+    console.log(`🎮 Total Losses: ₹${totalLosses.toFixed(2)}`);
+    console.log(`🎮 House Profit: ₹${houseProfit.toFixed(2)}`);
+    console.log(`${'='.repeat(50)}\n`);
+    
+    await session.commitTransaction();
+    console.log('✓ Transaction committed successfully');
+    session.endSession();
+    console.log(`🎮 Rahul Modi Round ${roundId} FULLY PROCESSED - Winner: ${winner.toUpperCase()}\n`);
+    
+  } catch (err) {
+    console.error('\n🎮 CRITICAL ERROR IN RAHUL MODI ROUND PROCESSING');
+    console.error('Error details:', err);
+    await session.abortTransaction();
+    session.endSession();
+    console.error('🎮 Transaction aborted due to error\n');
+  }
+}
 /* =========================
 SERVER START
 ========================= */
