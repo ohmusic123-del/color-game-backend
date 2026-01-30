@@ -616,11 +616,13 @@ app.post("/api/cashfree/webhook", async (req, res) => {
       user.deposited = true;
       user.depositAmount = Math.round(((user.depositAmount || 0) + amountToAdd) * 100) / 100;
 
-      const isFirstDeposit = user.depositAmount === amountToAdd;
-      if (isFirstDeposit) {
-        user.bonus = Math.round(((user.bonus || 0) + amountToAdd) * 100) / 100;
-      }
-
+     const isFirstDeposit = user.depositAmount === amountToAdd;
+if (isFirstDeposit) {
+  // ✅ FIX #2: FIRST DEPOSIT BONUS IS NOW 20% (was 100%)
+  const bonusAmount = amountToAdd * 0.20; // 20% bonus
+  user.bonus = Math.round(((user.bonus || 0) + bonusAmount) * 100) / 100;
+  console.log(`🎁 First Deposit Bonus: ${user.mobile} received ₹${bonusAmount.toFixed(2)} (20% of ₹${amountToAdd})`);
+}
       await user.save();
       await processReferralCommission(user.mobile, amountToAdd, "DEPOSIT");
 
@@ -1063,12 +1065,21 @@ app.post("/bet", auth, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    if (user.banned) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({ error: "Account suspended. Contact support." });
-    }
+  if (user.banned) {
+  await session.abortTransaction();
+  session.endSession();
+  return res.status(403).json({ error: "Account suspended. Contact support." });
+}
 
+// ✅ FIX #1: CHECK IF USER HAS DEPOSITED
+if (!user.deposited) {
+  await session.abortTransaction();
+  session.endSession();
+  return res.status(403).json({ 
+    error: "First deposit required to start playing",
+    requireDeposit: true 
+  });
+}
     const totalBalance = user.wallet + user.bonus;
     if (totalBalance < betAmount) {
       await session.abortTransaction();
@@ -1345,10 +1356,13 @@ async function startNewRound() {
   } catch (err) {
     console.error('ROUND INIT ERROR:', err);
     
-    CURRENT_ROUND.id = Date.now().toString();
+    // ✅ FIX #4: Use sequential ID even on error
+    const fallbackId = await getNextRoundId();
+    CURRENT_ROUND.id = fallbackId;
     CURRENT_ROUND.startTime = Date.now();
     roundTimer = setInterval(startNewRound, 1000);
   }
+
 })();
 /* =========================
 WITHDRAWALS
@@ -1916,11 +1930,21 @@ app.post("/rahulmodi/bet", auth, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    if (user.banned) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({ error: "Account suspended. Contact support." });
-    }
+   if (user.banned) {
+  await session.abortTransaction();
+  session.endSession();
+  return res.status(403).json({ error: "Account suspended. Contact support." });
+}
+
+// ✅ FIX #1: CHECK IF USER HAS DEPOSITED (Rahul Modi game too)
+if (!user.deposited) {
+  await session.abortTransaction();
+  session.endSession();
+  return res.status(403).json({ 
+    error: "First deposit required to start playing",
+    requireDeposit: true 
+  });
+}
 
     const totalBalance = user.wallet + user.bonus;
     if (totalBalance < betAmount) {
