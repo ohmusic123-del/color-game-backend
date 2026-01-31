@@ -1384,12 +1384,11 @@ user.deposited = true;
 user.depositAmount = Math.round((user.depositAmount + amount) * 100) / 100;
 const isFirstDeposit = user.depositAmount === amount;
 if (isFirstDeposit) {
-user.bonus = Math.round((user.bonus + amount) * 100) / 100;
+  // 20% bonus on first deposit
+  const bonusAmount = Math.round((amount * 0.20) * 100) / 100;
+  user.bonus = Math.round((user.bonus + bonusAmount) * 100) / 100;
+  console.log(`🎁 First deposit bonus applied: ₹${bonusAmount} (20% of ₹${amount})`);
 }
-await user.save();
-await processReferralCommission(user.mobile, amount, "DEPOSIT");
-console.log(`✅ Deposit: ${user.mobile} - ₹${amount} (First: ${isFirstDeposit})`);
-
 res.json({
 message: "Deposit successful",
 newWallet: user.wallet,
