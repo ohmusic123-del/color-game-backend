@@ -21,6 +21,7 @@ const Deposit = require("./models/Deposit");
 const Referral = require("./models/Referral");
 const MonitorUser = require("./models/MonitorUser");
 const MonitorActivity = require("./models/MonitorActivity");
+const GiftCode = require("./models/GiftCode");
 
 /* =========================
 MIDDLEWARE - MUST BE BEFORE ROUTES
@@ -1384,11 +1385,15 @@ user.deposited = true;
 user.depositAmount = Math.round((user.depositAmount + amount) * 100) / 100;
 const isFirstDeposit = user.depositAmount === amount;
 if (isFirstDeposit) {
-  // 20% bonus on first deposit
-  const bonusAmount = Math.round((amount * 0.20) * 100) / 100;
-  user.bonus = Math.round((user.bonus + bonusAmount) * 100) / 100;
-  console.log(`🎁 First deposit bonus applied: ₹${bonusAmount} (20% of ₹${amount})`);
+// 20% bonus on first deposit
+const bonusAmount = Math.round((amount * 0.20) * 100) / 100;
+user.bonus = Math.round((user.bonus + bonusAmount) * 100) / 100;
+console.log(`🎁 First deposit bonus applied: ₹${bonusAmount} (20% of ₹${amount})`);
 }
+await user.save();
+await processReferralCommission(user.mobile, amount, "DEPOSIT");
+console.log(`✅ Deposit: ${user.mobile} - ₹${amount} (First: ${isFirstDeposit})`);
+
 res.json({
 message: "Deposit successful",
 newWallet: user.wallet,
@@ -2095,20 +2100,558 @@ app.post("/admin/user/:mobile/adjust-balance", adminAuth, async (req, res) => {
 });
 
 /* =========================
+ENHANCED ADMIN USER MANAGEMENT
+========================= */
+
+// Get detailed user information
+app.get("/admin/user/:mobile", adminAuth, async (req, res) => {
+  try {
+    const { mobile } = req.params;
+    
+    const user = await User.findOne({ mobile }).select('-password');
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Get user's betting history
+    const bets = await Bet.find({ mobile })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    // Get user's deposit history
+    const deposits = await Deposit.find({ mobile })
+      .sort({ createdAt: -1 })
+      .limit(20);
+
+    // Get user's withdrawal history
+    const withdrawals = await Withdraw.find({ mobile })
+      .sort({ createdAt: -1 })
+      .limit(20);
+
+    // Get referral information
+    const directReferrals = await User.find({ referredBy: user.referralCode })
+      .select('mobile wallet depositAmount createdAt');
+
+    // Calculate statistics
+    const totalBets = bets.length;
+    const totalWagered = bets.reduce((sum, bet) => sum + bet.amount, 0);
+    const totalWon = bets.filter(b => b.status === 'WON').length;
+    const totalLost = bets.filter(b => b.status === 'LOST').length;
+    const winRate = totalBets > 0 ? ((totalWon / totalBets) * 100).toFixed(2) : 0;
+
+    const totalDeposited = deposits
+      .filter(d => d.status === 'SUCCESS')
+      .reduce((sum, d) => sum + d.amount, 0);
+
+    const totalWithdrawn = withdrawals
+      .filter(w => w.status === 'APPROVED')
+      .reduce((sum, w) => sum + w.amount, 0);
+
+    res.json({
+      user,
+      statistics: {
+        totalBets,
+        totalWagered: totalWagered.toFixed(2),
+        totalWon,
+        totalLost,
+        winRate,
+        totalDeposited: totalDeposited.toFixed(2),
+        totalWithdrawn: totalWithdrawn.toFixed(2),
+        netProfit: (totalDeposited - totalWithdrawn).toFixed(2),
+        directReferrals: directReferrals.length
+      },
+      recentBets: bets.slice(0, 10),
+      recentDeposits: deposits.slice(0, 5),
+      recentWithdrawals: withdrawals.slice(0, 5),
+      referrals: directReferrals
+    });
+  } catch (err) {
+    console.error("Admin user details error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Search users
+app.get("/admin/users/search", adminAuth, async (req, res) => {
+  try {
+    const { query, type } = req.query;
+
+    let searchCriteria = {};
+
+    if (type === 'mobile') {
+      searchCriteria = { mobile: { $regex: query, $options: 'i' } };
+    } else if (type === 'referralCode') {
+      searchCriteria = { referralCode: { $regex: query, $options: 'i' } };
+    } else {
+      // Search by mobile or referral code
+      searchCriteria = {
+        $or: [
+          { mobile: { $regex: query, $options: 'i' } },
+          { referralCode: { $regex: query, $options: 'i' } }
+        ]
+      };
+    }
+
+    const users = await User.find(searchCriteria)
+      .select('-password')
+      .limit(50)
+      .sort({ createdAt: -1 });
+
+    res.json(users);
+  } catch (err) {
+    console.error("User search error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get all users with pagination and filters
+app.get("/admin/users/list", adminAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+    
+    const filter = req.query.filter || 'all';
+    let query = {};
+
+    if (filter === 'deposited') {
+      query.deposited = true;
+    } else if (filter === 'banned') {
+      query.banned = true;
+    } else if (filter === 'active') {
+      // Users who bet in last 7 days
+      const activeMobiles = await Bet.distinct('mobile', {
+        createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+      });
+      query.mobile = { $in: activeMobiles };
+    }
+
+    const totalUsers = await User.countDocuments(query);
+    const users = await User.find(query)
+      .select('-password')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    res.json({
+      users,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalUsers / limit),
+        totalUsers,
+        limit
+      }
+    });
+  } catch (err) {
+    console.error("Users list error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Reset user password
+app.post("/admin/user/:mobile/reset-password", adminAuth, async (req, res) => {
+  try {
+    const { mobile } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const bcrypt = require('bcryptjs');
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    console.log(`Admin reset password for user: ${mobile}`);
+
+    res.json({
+      message: "Password reset successfully"
+    });
+  } catch (err) {
+    console.error("Password reset error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Add bonus to user account
+app.post("/admin/user/:mobile/add-bonus", adminAuth, async (req, res) => {
+  try {
+    const { mobile } = req.params;
+    const { amount, reason } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Invalid bonus amount" });
+    }
+
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    user.bonus = Math.round((user.bonus + amount) * 100) / 100;
+    await user.save();
+
+    console.log(`Admin added bonus: ${mobile} +₹${amount} - ${reason || 'Manual bonus'}`);
+
+    res.json({
+      message: "Bonus added successfully",
+      newBonus: user.bonus
+    });
+  } catch (err) {
+    console.error("Add bonus error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Delete user account
+app.delete("/admin/user/:mobile", adminAuth, async (req, res) => {
+  try {
+    const { mobile } = req.params;
+
+    const user = await User.findOne({ mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Delete associated data
+    await Bet.deleteMany({ mobile });
+    await Deposit.deleteMany({ mobile });
+    await Withdraw.deleteMany({ mobile });
+    await Referral.deleteMany({ $or: [{ fromMobile: mobile }, { toMobile: mobile }] });
+    await GiftCode.deleteMany({ createdBy: mobile });
+    
+    await User.deleteOne({ mobile });
+
+    console.log(`Admin deleted user: ${mobile}`);
+
+    res.json({
+      message: "User deleted successfully"
+    });
+  } catch (err) {
+    console.error("Delete user error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get admin gift codes overview
+app.get("/admin/giftcodes", adminAuth, async (req, res) => {
+  try {
+    const giftCodes = await GiftCode.find()
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    const stats = {
+      total: await GiftCode.countDocuments(),
+      active: await GiftCode.countDocuments({ status: 'active' }),
+      expired: await GiftCode.countDocuments({ status: 'expired' }),
+      fullyRedeemed: await GiftCode.countDocuments({ status: 'fully-redeemed' }),
+      totalAmount: giftCodes.reduce((sum, gc) => sum + (gc.amount * gc.redemptionCount), 0)
+    };
+
+    res.json({
+      giftCodes,
+      stats
+    });
+  } catch (err) {
+    console.error("Admin gift codes error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Delete gift code (admin)
+app.delete("/admin/giftcode/:code", adminAuth, async (req, res) => {
+  try {
+    const { code } = req.params;
+
+    const giftCode = await GiftCode.findOneAndDelete({ code: code.toUpperCase() });
+    if (!giftCode) {
+      return res.status(404).json({ error: "Gift code not found" });
+    }
+
+    console.log(`Admin deleted gift code: ${code}`);
+
+    res.json({
+      message: "Gift code deleted successfully"
+    });
+  } catch (err) {
+    console.error("Delete gift code error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/* =========================
+GIFT CODE SYSTEM - USER ENDPOINTS
+========================= */
+
+// Create gift code
+app.post("/giftcode/create", auth, async (req, res) => {
+  try {
+    const { amount, type, maxRedemptions, validityDays, description } = req.body;
+
+    // Validate inputs
+    if (!amount || amount < 10) {
+      return res.status(400).json({ error: "Minimum gift amount is ₹10" });
+    }
+
+    if (amount > 10000) {
+      return res.status(400).json({ error: "Maximum gift amount is ₹10,000" });
+    }
+
+    if (!['one-to-one', 'one-to-many'].includes(type)) {
+      return res.status(400).json({ error: "Invalid gift code type" });
+    }
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check if user has sufficient balance
+    if (user.wallet < amount) {
+      return res.status(400).json({ 
+        error: `Insufficient balance. You need ₹${amount} to create this gift code.` 
+      });
+    }
+
+    // Deduct amount from user's wallet
+    user.wallet = Math.round((user.wallet - amount) * 100) / 100;
+    await user.save();
+
+    // Generate unique code
+    const generateCode = () => {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let code = '';
+      for (let i = 0; i < 8; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return code;
+    };
+
+    let code = generateCode();
+    let attempts = 0;
+    
+    // Ensure code is unique
+    while (await GiftCode.findOne({ code }) && attempts < 10) {
+      code = generateCode();
+      attempts++;
+    }
+
+    // Calculate expiry date
+    const validity = validityDays || 30; // Default 30 days
+    const expiresAt = new Date(Date.now() + validity * 24 * 60 * 60 * 1000);
+
+    // Create gift code
+    const giftCode = await GiftCode.create({
+      code,
+      createdBy: user.mobile,
+      amount,
+      type,
+      maxRedemptions: type === 'one-to-one' ? 1 : (maxRedemptions || 999999),
+      expiresAt,
+      description: description || `Gift from ${user.mobile.substring(0, 4)}****`
+    });
+
+    console.log(`🎁 Gift code created: ${code} by ${user.mobile} - ₹${amount} (${type})`);
+
+    res.json({
+      message: "Gift code created successfully",
+      giftCode: {
+        code: giftCode.code,
+        amount: giftCode.amount,
+        type: giftCode.type,
+        expiresAt: giftCode.expiresAt,
+        maxRedemptions: giftCode.maxRedemptions
+      },
+      newWallet: user.wallet
+    });
+  } catch (err) {
+    console.error("Create gift code error:", err);
+    res.status(500).json({ error: "Failed to create gift code" });
+  }
+});
+
+// Redeem gift code
+app.post("/giftcode/redeem", auth, async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({ error: "Gift code is required" });
+    }
+
+    const user = await User.findOne({ mobile: req.user.mobile });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const giftCode = await GiftCode.findOne({ code: code.toUpperCase() });
+    if (!giftCode) {
+      return res.status(404).json({ error: "Invalid gift code" });
+    }
+
+    // Check if code can be redeemed
+    const canRedeem = giftCode.canRedeem(user.mobile);
+    if (!canRedeem.success) {
+      return res.status(400).json({ error: canRedeem.message });
+    }
+
+    // Redeem the code
+    giftCode.redeem(user.mobile);
+    await giftCode.save();
+
+    // Add amount to user's bonus
+    user.bonus = Math.round((user.bonus + giftCode.amount) * 100) / 100;
+    await user.save();
+
+    console.log(`🎁 Gift code redeemed: ${code} by ${user.mobile} - ₹${giftCode.amount}`);
+
+    res.json({
+      message: `Gift code redeemed! ₹${giftCode.amount} added to your bonus`,
+      amount: giftCode.amount,
+      newBonus: user.bonus
+    });
+  } catch (err) {
+    console.error("Redeem gift code error:", err);
+    res.status(500).json({ error: "Failed to redeem gift code" });
+  }
+});
+
+// Get user's created gift codes
+app.get("/giftcode/my-codes", auth, async (req, res) => {
+  try {
+    const giftCodes = await GiftCode.find({ createdBy: req.user.mobile })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.json(giftCodes);
+  } catch (err) {
+    console.error("My gift codes error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get user's redeemed gift codes
+app.get("/giftcode/redeemed", auth, async (req, res) => {
+  try {
+    const giftCodes = await GiftCode.find({
+      'redeemedBy.mobile': req.user.mobile
+    })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    const redeemedCodes = giftCodes.map(gc => {
+      const redemption = gc.redeemedBy.find(r => r.mobile === req.user.mobile);
+      return {
+        code: gc.code,
+        amount: gc.amount,
+        redeemedAt: redemption.redeemedAt,
+        createdBy: gc.createdBy
+      };
+    });
+
+    res.json(redeemedCodes);
+  } catch (err) {
+    console.error("Redeemed gift codes error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Verify gift code (check without redeeming)
+app.post("/giftcode/verify", auth, async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({ error: "Gift code is required" });
+    }
+
+    const giftCode = await GiftCode.findOne({ code: code.toUpperCase() });
+    if (!giftCode) {
+      return res.status(404).json({ error: "Invalid gift code" });
+    }
+
+    const canRedeem = giftCode.canRedeem(req.user.mobile);
+
+    res.json({
+      valid: canRedeem.success,
+      message: canRedeem.message || 'Gift code is valid',
+      giftCode: canRedeem.success ? {
+        code: giftCode.code,
+        amount: giftCode.amount,
+        type: giftCode.type,
+        expiresAt: giftCode.expiresAt,
+        description: giftCode.description
+      } : null
+    });
+  } catch (err) {
+    console.error("Verify gift code error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Delete own gift code
+app.delete("/giftcode/:code", auth, async (req, res) => {
+  try {
+    const { code } = req.params;
+
+    const giftCode = await GiftCode.findOne({ 
+      code: code.toUpperCase(),
+      createdBy: req.user.mobile 
+    });
+
+    if (!giftCode) {
+      return res.status(404).json({ error: "Gift code not found or not created by you" });
+    }
+
+    // Check if already redeemed
+    if (giftCode.redemptionCount > 0) {
+      return res.status(400).json({ 
+        error: "Cannot delete a gift code that has been redeemed" 
+      });
+    }
+
+    // Refund the amount to user
+    const user = await User.findOne({ mobile: req.user.mobile });
+    user.wallet = Math.round((user.wallet + giftCode.amount) * 100) / 100;
+    await user.save();
+
+    await GiftCode.deleteOne({ _id: giftCode._id });
+
+    console.log(`🎁 Gift code deleted: ${code} by ${req.user.mobile} - Refunded ₹${giftCode.amount}`);
+
+    res.json({
+      message: `Gift code deleted and ₹${giftCode.amount} refunded to your wallet`,
+      newWallet: user.wallet
+    });
+  } catch (err) {
+    console.error("Delete gift code error:", err);
+    res.status(500).json({ error: "Failed to delete gift code" });
+  }
+});
+
+/* =========================
 SERVER START
 ========================= */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log('\n' + '='.repeat(50));
-  console.log('🎮 BIGWIN Backend Server');
+  console.log('🎮 BIGWIN Backend Server - ENHANCED');
   console.log('='.repeat(50));
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`🌐 API URL: http://localhost:${PORT}`);
   console.log(`📊 MongoDB: Connected`);
   console.log(`⏰ Round Duration: 60 seconds`);
   console.log(`🏦 House Edge: 2%`);
-  console.log(`🎁 Registration Bonus: ₹100 bonus`);
-  console.log(`💰 Referral Levels: 6 (22% total commission)`);
+  console.log(`🎁 Registration Bonus: ₹50 bonus`);
+  console.log(`💰 First Deposit Bonus: 20%`);
+  console.log(`🎁 Gift Code System: Enabled`);
+  console.log(`💰 Referral Levels: 6 (11% total commission)`);
+  console.log(`👑 Admin Panel: Enhanced`);
   console.log('='.repeat(50) + '\n');
 });
