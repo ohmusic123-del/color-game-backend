@@ -527,10 +527,16 @@ let CURRENT_ROUND = {
 
 app.get("/round/current", async (req, res) => {
   try {
-    // Return the current round info
+    const elapsed = Math.floor((Date.now() - CURRENT_ROUND.startTime) / 1000);
+    const timeLeft = Math.max(0, 60 - elapsed);
+    
+    // Return the current round info with timing data
     res.json({
       id: CURRENT_ROUND.id,
-      startTime: CURRENT_ROUND.startTime
+      roundId: CURRENT_ROUND.id,
+      startTime: CURRENT_ROUND.startTime,
+      timeLeft: timeLeft,
+      serverTime: Date.now()
     });
   } catch (err) {
     console.error("Current round error:", err);
@@ -918,12 +924,24 @@ const user = await User.findOne({ mobile: req.user.mobile });
 if (!user) {
 return res.status(404).json({ message: 'User not found' });
 }
+
+// Generate userCode if not exists
+let userCode = user.userCode;
+if (!userCode) {
+userCode = `USER${user.mobile.slice(-6)}`;
+user.userCode = userCode;
+await user.save();
+}
+
 res.json({
+mobile: user.mobile,
+userCode: userCode,
 wallet: parseFloat(user.wallet || 0).toFixed(2),
 bonus: parseFloat(user.bonus || 0).toFixed(2),
 totalWagered: parseFloat(user.totalWagered || 0).toFixed(2),
 deposited: user.deposited || false,
-depositAmount: parseFloat(user.depositAmount || 0).toFixed(2)
+depositAmount: parseFloat(user.depositAmount || 0).toFixed(2),
+createdAt: user.createdAt
 });
 } catch (err) {
 console.error('Wallet fetch error:', err);
@@ -936,13 +954,24 @@ const user = await User.findOne({ mobile: req.user.mobile });
 if (!user) {
 return res.status(404).json({ error: "User not found" });
 }
+
+// Generate userCode if not exists
+let userCode = user.userCode;
+if (!userCode) {
+userCode = `USER${user.mobile.slice(-6)}`;
+user.userCode = userCode;
+await user.save();
+}
+
 res.json({
 mobile: user.mobile,
-wallet: user.wallet,
-bonus: user.bonus,
-totalWagered: user.totalWagered,
+userCode: userCode,
+wallet: user.wallet || 0,
+bonus: user.bonus || 0,
+totalWagered: user.totalWagered || 0,
 referralCode: user.referralCode,
-deposited: user.deposited
+deposited: user.deposited || 0,
+createdAt: user.createdAt
 });
 } catch (err) {
 console.error("Profile error:", err);
