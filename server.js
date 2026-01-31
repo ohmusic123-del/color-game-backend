@@ -936,6 +936,7 @@ await user.save();
 res.json({
 mobile: user.mobile,
 userCode: userCode,
+referralCode: user.referralCode,
 wallet: parseFloat(user.wallet || 0).toFixed(2),
 bonus: parseFloat(user.bonus || 0).toFixed(2),
 totalWagered: parseFloat(user.totalWagered || 0).toFixed(2),
