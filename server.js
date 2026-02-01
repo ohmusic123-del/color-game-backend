@@ -1695,8 +1695,6 @@ app.get("/referral/info", auth, async (req, res) => {
       /* =========================
 ADMIN LOGIN
 ========================= */
-ADMIN LOGIN
-========================= */
 app.post("/admin/login", async (req, res) => {
   try {
     const { username, password } = req.body;
