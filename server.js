@@ -1695,6 +1695,8 @@ app.get("/referral/info", auth, async (req, res) => {
       /* =========================
 ADMIN LOGIN
 ========================= */
+ADMIN LOGIN
+========================= */
 app.post("/admin/login", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -1727,7 +1729,6 @@ app.post("/admin/login", async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 });
-
 /* =========================
 ADMIN ENDPOINTS
 ========================= */
