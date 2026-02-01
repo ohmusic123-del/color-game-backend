@@ -40,7 +40,7 @@ app.use((req, res, next) => {
 
 
 
-// Admin Auth
+// Admin Auth - FIXED VERSION
 function adminAuth(req, res, next) {
     try {
         const token = req.headers.authorization?.replace("Bearer ", "");
@@ -54,7 +54,19 @@ function adminAuth(req, res, next) {
         req.admin = decoded;
         next();
     } catch (err) {
-        return res.status(401).json({ error: "Invalid admin token" });
+        // Check if token is expired
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({ 
+                error: "Admin token expired",
+                code: "TOKEN_EXPIRED",
+                expiredAt: err.expiredAt 
+            });
+        }
+        // Handle other JWT errors
+        return res.status(401).json({ 
+            error: "Invalid admin token",
+            code: "INVALID_TOKEN"
+        });
     }
 }
 
