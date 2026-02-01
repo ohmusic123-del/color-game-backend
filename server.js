@@ -53,11 +53,21 @@ function adminAuth(req, res, next) {
         }
         req.admin = decoded;
         next();
-    } catch (err) {
-        return res.status(401).json({ error: "Invalid admin token" });
+    }catch (err) {
+    if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ 
+            error: "Session expired. Please login again.", 
+            code: "TOKEN_EXPIRED" 
+        });
     }
+    if (err.name === 'JsonWebTokenError') {
+        return res.status(401).json({ 
+            error: "Invalid admin token", 
+            code: "INVALID_TOKEN" 
+        });
+    }
+    return res.status(401).json({ error: "Authentication failed" });
 }
-
 
 // Monitor Auth
 const authenticateMonitor = async (req, res, next) => {
@@ -1699,26 +1709,28 @@ app.post("/admin/login", async (req, res) => {
   try {
     const { username, password } = req.body;
 
-    const ADMIN_USERNAME = "admin";
-    const ADMIN_PASSWORD = "admin123";
+   const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
-    if (!username || !password) {
-      return res.status(400).json({ error: "Username and password required" });
-    }
+if (!ADMIN_PASSWORD) {
+    console.error('⚠️  ADMIN_PASSWORD not set in environment variables!');
+    return res.status(500).json({ error: "Server configuration error" });
+}
 
     if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
       const token = jwt.sign(
         { username: username, role: "admin" },
         process.env.JWT_SECRET,
-        { expiresIn: '7d' }
+        { expiresIn: '24h'  }
       );
 
       console.log('✅ Admin logged in:', username);
 
-      return res.json({
-        message: "Admin login successful",
-        token: `Bearer ${token}`
-      });
+     return res.json({
+    message: "Admin login successful",
+    token: token,  // ✅ Correct - plain token
+    expiresIn: 86400  // Added expiry info
+});
     } else {
       return res.status(401).json({ error: "Invalid admin credentials" });
     }
