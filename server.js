@@ -2237,6 +2237,8 @@ app.get("/admin/users/search", adminAuth, async (req, res) => {
 // Get all users with pagination and filters
 app.get("/admin/users/list", adminAuth, async (req, res) => {
   try {
+    console.log('📋 [ADMIN] Loading users list - Page:', req.query.page, 'Filter:', req.query.filter);
+    
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
@@ -2257,11 +2259,15 @@ app.get("/admin/users/list", adminAuth, async (req, res) => {
     }
 
     const totalUsers = await User.countDocuments(query);
+    console.log('  Total users in query:', totalUsers);
+    
     const users = await User.find(query)
       .select('-password')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
+
+    console.log('✅ [ADMIN] Returning', users.length, 'users');
 
     res.json({
       users,
@@ -2273,8 +2279,8 @@ app.get("/admin/users/list", adminAuth, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error("Users list error:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ [ADMIN] Users list error:", err.message, err.stack);
+    res.status(500).json({ error: "Server error: " + err.message });
   }
 });
 
