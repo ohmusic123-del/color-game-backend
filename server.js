@@ -22,6 +22,12 @@ const Referral = require("./models/Referral");
 const MonitorUser = require("./models/MonitorUser");
 const MonitorActivity = require("./models/MonitorActivity");
 const GiftCode = require("./models/GiftCode");
+// NEW GAME MODELS
+const WingoBet = require("./models/WingoBet");
+const WingoRound = require("./models/WingoRound");
+const Game5DBet = require("./models/Game5DBet");
+const TRXBet = require("./models/TRXBet");
+const K3Bet = require("./models/K3Bet");
 
 /* =========================
 MIDDLEWARE - MUST BE BEFORE ROUTES
@@ -2669,7 +2675,329 @@ app.delete("/giftcode/:code", auth, async (req, res) => {
     res.status(500).json({ error: "Failed to delete gift code" });
   }
 });
+// ============================================
+// WINGO GAME ROUTES
+// ============================================
 
+// Get current Wingo round
+app.get("/wingo/current/:gameType", async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    
+    // Find active round
+    let round = await WingoRound.findOne({
+      gameType,
+      status: { $in: ['betting', 'calculating'] }
+    }).sort({ createdAt: -1 });
+    
+    // If no active round, create new one
+    if (!round) {
+      const duration = gameType === 'wingo1min' ? 60000 : 
+                      gameType === 'wingo3min' ? 180000 :
+                      gameType === 'wingo5min' ? 300000 : 600000;
+      
+      const now = new Date();
+      const roundId = `${gameType}_${Date.now()}`;
+      
+      round = await WingoRound.create({
+        roundId,
+        gameType,
+        startTime: now,
+        endTime: new Date(now.getTime() + duration),
+        status: 'betting'
+      });
+    }
+    
+    res.json({
+      success: true,
+      round: {
+        roundId: round.roundId,
+        gameType: round.gameType,
+        status: round.status,
+        timeLeft: Math.max(0, round.endTime - new Date()),
+        result: round.result,
+        color: round.color
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Place Wingo bet
+app.post("/wingo/bet", auth, async (req, res) => {
+  try {
+    const { gameType, betType, selection, amount } = req.body;
+    const userId = req.user.userId;
+    
+    // Validate amount
+    if (amount < 1) {
+      return res.status(400).json({ error: "Minimum bet is ₹1" });
+    }
+    
+    // Get user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    // Check balance
+    if (user.balance < amount) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+    
+    // Get current round
+    const round = await WingoRound.findOne({
+      gameType,
+      status: 'betting'
+    }).sort({ createdAt: -1 });
+    
+    if (!round) {
+      return res.status(400).json({ error: "No active round" });
+    }
+    
+    // Determine multiplier
+    let multiplier = 2;
+    if (betType === 'number') {
+      multiplier = 9;
+    } else if (betType === 'color' && (selection === 'red' || selection === 'green')) {
+      multiplier = 2;
+    } else if (betType === 'color' && selection === 'violet') {
+      multiplier = 4.5;
+    }
+    
+    // Deduct balance
+    user.balance -= amount;
+    await user.save();
+    
+    // Create bet
+    const bet = await WingoBet.create({
+      userId,
+      roundId: round.roundId,
+      gameType,
+      betType,
+      selection,
+      amount,
+      multiplier
+    });
+    
+    // Update round stats
+    round.totalBets += 1;
+    round.totalAmount += amount;
+    await round.save();
+    
+    res.json({
+      success: true,
+      bet: {
+        betId: bet._id,
+        amount,
+        multiplier,
+        roundId: round.roundId
+      },
+      newBalance: user.balance
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get Wingo bet history
+app.get("/wingo/mybets/:gameType", auth, async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    const userId = req.user.userId;
+    
+    const bets = await WingoBet.find({ userId, gameType })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    
+    res.json({ success: true, bets });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get Wingo results history
+app.get("/wingo/results/:gameType", async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    
+    const rounds = await WingoRound.find({
+      gameType,
+      status: 'completed'
+    })
+    .sort({ createdAt: -1 })
+    .limit(100);
+    
+    res.json({ success: true, results: rounds });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// 5D GAME ROUTES
+// ============================================
+
+app.get("/5d/current/:gameType", async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    
+    // Similar structure to Wingo
+    res.json({
+      success: true,
+      round: {
+        roundId: `${gameType}_${Date.now()}`,
+        gameType,
+        status: 'betting',
+        timeLeft: 60000
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/5d/bet", auth, async (req, res) => {
+  try {
+    const { gameType, betType, selection, amount } = req.body;
+    const userId = req.user.userId;
+    
+    const user = await User.findById(userId);
+    if (user.balance < amount) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+    
+    user.balance -= amount;
+    await user.save();
+    
+    const bet = await Game5DBet.create({
+      userId,
+      roundId: `${gameType}_${Date.now()}`,
+      gameType,
+      betType,
+      selection,
+      amount,
+      multiplier: 9
+    });
+    
+    res.json({
+      success: true,
+      bet,
+      newBalance: user.balance
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// TRX GAME ROUTES
+// ============================================
+
+app.get("/trx/current/:gameType", async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    
+    res.json({
+      success: true,
+      round: {
+        roundId: `${gameType}_${Date.now()}`,
+        gameType,
+        status: 'betting',
+        timeLeft: 60000
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/trx/bet", auth, async (req, res) => {
+  try {
+    const { gameType, betType, selection, amount } = req.body;
+    const userId = req.user.userId;
+    
+    const user = await User.findById(userId);
+    if (user.balance < amount) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+    
+    user.balance -= amount;
+    await user.save();
+    
+    const bet = await TRXBet.create({
+      userId,
+      roundId: `${gameType}_${Date.now()}`,
+      gameType,
+      betType,
+      selection,
+      amount
+    });
+    
+    res.json({
+      success: true,
+      bet,
+      newBalance: user.balance
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// K3 GAME ROUTES
+// ============================================
+
+app.get("/k3/current/:gameType", async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    
+    res.json({
+      success: true,
+      round: {
+        roundId: `${gameType}_${Date.now()}`,
+        gameType,
+        status: 'betting',
+        timeLeft: 60000
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/k3/bet", auth, async (req, res) => {
+  try {
+    const { gameType, betType, selection, amount } = req.body;
+    const userId = req.user.userId;
+    
+    const user = await User.findById(userId);
+    if (user.balance < amount) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+    
+    user.balance -= amount;
+    await user.save();
+    
+    const bet = await K3Bet.create({
+      userId,
+      roundId: `${gameType}_${Date.now()}`,
+      gameType,
+      betType,
+      selection,
+      amount
+    });
+    
+    res.json({
+      success: true,
+      bet,
+      newBalance: user.balance
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 /* =========================
 SERVER START
 ========================= */
